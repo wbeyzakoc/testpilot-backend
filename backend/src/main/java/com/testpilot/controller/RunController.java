@@ -19,6 +19,15 @@ import java.util.UUID;
 public class RunController {
 
     private static final int MAX_STEPS = 15;
+    private static final List<String> INFO_LINK_KEYWORDS = List.of(
+            "learn more", "daha fazla bilgi", "hakkında", "detaylar", "more info", "öğren", "about"
+    );
+
+    private boolean isInformationalLink(String target) {
+        if (target == null) return false;
+        String t = target.toLowerCase();
+        return INFO_LINK_KEYWORDS.stream().anyMatch(t::contains);
+    }
 
     private final AppiumDriverManager appiumDriverManager;
     private final LlmAgent llmAgent;
@@ -29,13 +38,17 @@ public class RunController {
         this.llmAgent = llmAgent;
         this.runStore = runStore;
     }
-
+    @DeleteMapping("/{id}")
+    public void deleteRun(@PathVariable String id) {
+        runStore.delete(id);
+    }
     @PostMapping
     public Run createRun(@RequestBody TestRequest request) {
         Run run = new Run();
         run.setId(UUID.randomUUID().toString());
         run.setGoal(request.getGoal());
         run.setAppPackage(request.getAppPackage());
+        run.setAppActivity(request.getAppActivity());
         run.setStatus("running");
         run.setStartedAt(Instant.now().toString());
         runStore.save(run);
@@ -116,7 +129,24 @@ public class RunController {
                 String filteredPageSource = appiumDriverManager.filterPageSource(rawPageSource);
                 System.out.println("=== FİLTRELENMİŞ XML (adım " + i + ") ===\n" + filteredPageSource);
 
-                AgentAction action = llmAgent.decideNextAction(run.getGoal(), variables, screenshot, filteredPageSource, i, run.getSteps());
+                AgentAction action;
+                try {
+                    action = llmAgent.decideNextAction(run.getGoal(), variables, screenshot, filteredPageSource, i, run.getSteps());
+                } catch (Exception decideEx) {
+                    run.getSteps().add(new RunStep(i, "failed", null, "Model kararı alınamadı, tekrar deneniyor: " + decideEx.getMessage()));
+                    runStore.save(run);
+                    Thread.sleep(800);
+                    continue;
+                }
+
+                if (isInformationalLink(action.getTarget())) {
+                    run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
+                            "Bilgilendirme/link elementine tıklanması engellendi (ana akıştan uzaklaştırır), farklı bir element seçilmesi için tekrar deneniyor."));
+                    runStore.save(run);
+                    Thread.sleep(500);
+                    continue;
+                }
+
                 String currentSignature = action.getAction() + "|" + action.getTarget() + "|" + filteredPageSource.hashCode();                if (currentSignature.equals(lastActionSignature)) {
                     repeatCount++;
                 } else {
@@ -124,7 +154,7 @@ public class RunController {
                     lastActionSignature = currentSignature;
                 }
 
-                if (repeatCount >= 2) { // aynı şey 3. kez tekrar edince dur (0,1,2 -> 3 tekrar)
+                if (repeatCount >= 2) {
                     run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
                             "Aynı aksiyon (" + action.getTarget() + ") üst üste tekrarlandı, model ilerleme kaydedemiyor. Test durduruldu."));
                     run.setStatus("failed");
@@ -144,6 +174,7 @@ public class RunController {
                         }
                         run.getSteps().add(new RunStep(i, "tap", action.getTarget(), action.getReasoning()));
                         appiumDriverManager.tap(action.getX(), action.getY());
+                        Thread.sleep(400); // geçiş animasyonunun oturması için ekstra bekleme
 
                     }
                     case "type" -> {

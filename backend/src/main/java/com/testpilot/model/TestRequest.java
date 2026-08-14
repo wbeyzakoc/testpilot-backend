@@ -7,7 +7,10 @@ public class TestRequest {
     private Map<String, String> variables;
     private String appPackage;
     private String appActivity;
+    private String platform;
 
+    public String getPlatform() { return platform; }
+    public void setPlatform(String platform) { this.platform = platform; }
     public String getGoal() { return goal; }
     public void setGoal(String goal) { this.goal = goal; }
     public Map<String, String> getVariables() { return variables; }

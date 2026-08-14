@@ -43,7 +43,10 @@ public class RunStore {
     public Run get(String id) {
         return runs.get(id);
     }
-
+    public synchronized void delete(String id) {
+        runs.remove(id);
+        persist();
+    }
     public List<Run> getAll() {
         List<Run> all = new ArrayList<>(runs.values());
         all.sort(Comparator.comparing(Run::getStartedAt).reversed());

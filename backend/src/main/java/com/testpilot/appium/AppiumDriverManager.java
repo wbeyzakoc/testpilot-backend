@@ -2,6 +2,8 @@ package com.testpilot.appium;
 
 import io.appium.java_client.android.AndroidDriver;
 import io.appium.java_client.android.options.UiAutomator2Options;
+import io.appium.java_client.android.nativekey.AndroidKey;
+import io.appium.java_client.android.nativekey.KeyEvent;
 import org.openqa.selenium.Dimension;
 import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.OutputType;
@@ -9,8 +11,7 @@ import org.openqa.selenium.interactions.PointerInput;
 import org.openqa.selenium.interactions.Sequence;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import io.appium.java_client.android.nativekey.AndroidKey;
-import io.appium.java_client.android.nativekey.KeyEvent;
+
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.time.Duration;
@@ -33,33 +34,32 @@ public class AppiumDriverManager {
     private String defaultAppActivity;
 
     private AndroidDriver driver;
-    public void resetToFreshState(String appPackage) {
-        ((JavascriptExecutor) driver).executeScript("mobile: clearApp", Map.of("appId", appPackage));
-        driver.activateApp(appPackage);
-    }
-    public AndroidDriver startSession(String appPackage, String appActivity) {
+
+    public AndroidDriver startSession(String appIdentifier, String appActivity) {
         if (driver != null) {
             return driver;
         }
-        String pkg = (appPackage != null && !appPackage.isBlank()) ? appPackage : defaultAppPackage;
-        String activity = (appActivity != null && !appActivity.isBlank()) ? appActivity : defaultAppActivity;
-
-        UiAutomator2Options options = new UiAutomator2Options()
-                .setDeviceName("emulator-5554")
-                .setAppPackage(pkg)
-                .setAppActivity(activity)
-                .setAutoGrantPermissions(true)
-                .setNoReset(true);
 
         try {
-            driver = new AndroidDriver(new URL(appiumServerUrl), options);
-            // Uygulamayı tamamen kapatıp yeniden açıyoruz ki her test AYNI (varsayılan) ekrandan
-            // başlasın - yoksa uygulama bir önceki testin kaldığı sekmede açılabiliyor.
+            String pkg = (appIdentifier != null && !appIdentifier.isBlank()) ? appIdentifier : defaultAppPackage;
+            String activity = (appActivity != null && !appActivity.isBlank()) ? appActivity : defaultAppActivity;
 
+            UiAutomator2Options options = new UiAutomator2Options()
+                    .setDeviceName("emulator-5554")
+                    .setAppPackage(pkg)
+                    .setAppActivity(activity)
+                    .setAutoGrantPermissions(true)
+                    .setNoReset(true);
+            driver = new AndroidDriver(new URL(appiumServerUrl), options);
         } catch (MalformedURLException e) {
             throw new RuntimeException("Appium sunucu adresi hatalı: " + appiumServerUrl, e);
         }
         return driver;
+    }
+
+    public void resetToFreshState(String appIdentifier) {
+        ((JavascriptExecutor) driver).executeScript("mobile: clearApp", Map.of("appId", appIdentifier));
+        driver.activateApp(appIdentifier);
     }
 
     public String takeScreenshotBase64() {
@@ -70,12 +70,6 @@ public class AppiumDriverManager {
         return driver.getPageSource();
     }
 
-    /**
-     * XML'i modele göndermeden önce filtreler ve önceliklendirir.
-     * Öncelik sırası: (1) clickable + etiketli (text/content-desc dolu) elementler,
-     * (2) sadece etiketli (clickable olmasa da) elementler, (3) sadece clickable olan etiketsiz elementler.
-     * Toplamda en fazla BUDGET kadar element gönderilir.
-     */
     public String filterPageSource(String rawPageSource) {
         if (rawPageSource == null) return "";
 
@@ -131,11 +125,6 @@ public class AppiumDriverManager {
         return null;
     }
 
-    /**
-     * Verilen (x,y) koordinatının XML'deki GERÇEK bir elementin bounds'u içinde olup olmadığını kontrol eder.
-     * clickable="true" şartı aranmıyor çünkü bu uygulamada gerçek tıklanabilir elementlerin çoğu
-     * clickable="false" raporluyor (tıklama üst view tarafından yönetiliyor).
-     */
     public boolean isValidCoordinate(String rawPageSource, int x, int y) {
         if (rawPageSource == null) return false;
 
@@ -237,6 +226,7 @@ public class AppiumDriverManager {
         } catch (Exception ignored) {
         }
     }
+
     public void invalidateSession() {
         driver = null;
     }

@@ -30,7 +30,15 @@ public class Run {//bir testin tüm durumu
     public void setStopRequested(boolean stopRequested) { this.stopRequested = stopRequested; }
     private String appPackage;
     private List<ScenarioSuggestion> suggestions;
+    private String appActivity;
 
+    public String getAppActivity() {
+        return appActivity;
+    }
+
+    public void setAppActivity(String appActivity) {
+        this.appActivity = appActivity;
+    }
     public List<ScenarioSuggestion> getSuggestions() { return suggestions; }
     public void setSuggestions(List<ScenarioSuggestion> suggestions) { this.suggestions = suggestions; }
     public String getAppPackage() { return appPackage; }

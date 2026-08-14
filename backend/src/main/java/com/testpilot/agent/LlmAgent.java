@@ -84,11 +84,20 @@ public class LlmAgent {
             ASLA action=done döndürme. Emin değilsen ya farklı bir element dene ya da action=fail döndür.
 
             ÖNEMLİ - POPUP/DIALOG ÖNCELİĞİ: Ekranda hedefe ulaşmanı engelleyen bir popup, dialog, bildirim izni,
-            onboarding/tanıtım ekranı ya da örtü (overlay) varsa, ÖNCE bunu kapatmayı dene - asıl hedefe yönelik
-            başka hiçbir aksiyon denemeden önce bunu yap. Bu tür ekranlarda genellikle "Kapat", "Close", "İptal",
-            "Tamam", "Devam et", "Skip", "Continue", "Got it", "Allow"/"Don't Allow", "Forward", "Next", "X"
-            işareti gibi elementler bulunur - bunlardan ilerlemeyi sağlayacak en mantıklı olanı seç ve ona tıkla.
-
+                        onboarding/tanıtım ekranı ya da örtü (overlay) varsa, ÖNCE bunu kapatmayı/geçmeyi dene - asıl hedefe
+                        yönelik başka hiçbir aksiyon denemeden önce bunu yap. BUNU HER ADIMDA yeniden değerlendir: önceki
+                        adımda bir onboarding/tanıtım ekranını geçmiş olsan bile, şu anki ekran hâlâ tanıtım/izin/onboarding
+                        görünümündeyse (büyük illüstrasyon/görsel, sayfa noktaları/ilerleme göstergesi, "Skip"/"Continue"
+                        gibi butonlar hâlâ varsa) hedefe yönelik aksiyona GEÇME, önce bu ekranı da geçmeye devam et.
+            
+                        Bu tür ekranlarda ilerlemeyi sağlayan elementi şu ÖNCELİK SIRASINA göre seç:
+                        1. "Skip" / "Atla" - varsa en önce bunu tercih et, en hızlı geçiş yoludur.
+                        2. "Continue" / "Devam et" / "Next" / "İleri" / "Forward" - ana akış butonu.
+                        3. "Kapat" / "Close" / "X" işareti / "İptal" / "Tamam" / "Got it" / "Allow"/"Don't Allow".
+            
+                        DİKKAT: "Learn more", "Daha fazla bilgi", "Hakkında", "Detaylar" gibi bilgilendirme/link
+                        elementlerine ASLA tıklama - bunlar popup'ı kapatmaz, seni ana akıştan uzaklaştırıp farklı bir
+                        ekrana/tarayıcıya götürebilir. Hedefin popup'ı geçmekse bu tarz elementleri tamamen yok say.
             Kullanıcının tanımladığı test değişkenleri (varsa) sana ayrıca verilecek; bir giriş formunda
             mail/şifre gibi bir alan doldurman gerekiyorsa bu değişkenleri kullan.
             """;
@@ -159,12 +168,18 @@ public class LlmAgent {
                 String content = root.at("/choices/0/message/content").asText();
 
                 String jsonOnly = extractJson(content);
+                AgentAction result;
                 try {
-                    return mapper.readValue(jsonOnly, AgentAction.class);
+                    result = mapper.readValue(jsonOnly, AgentAction.class);
                 } catch (Exception parseEx) {
                     System.out.println("JSON parse edilemedi, modelin ham cevabı:\n" + content);
                     throw new RuntimeException("Model geçerli JSON döndürmedi: " + parseEx.getMessage());
                 }
+                if (result == null || result.getAction() == null) {
+                    System.out.println("Model boş/geçersiz aksiyon döndürdü, ham cevap:\n" + content);
+                    throw new RuntimeException("Model boş veya geçersiz bir aksiyon döndürdü (muhtemelen API boş content döndü)");
+                }
+                return result;
             }
         } catch (IOException e) {
             throw new RuntimeException("LLM aksiyon kararı alınırken hata oluştu", e);
