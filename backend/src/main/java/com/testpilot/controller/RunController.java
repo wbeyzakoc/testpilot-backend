@@ -44,7 +44,24 @@ public class RunController {
 
         return run;
     }
-
+    @PostMapping("/{id}/suggestions/page")
+    public List<ScenarioSuggestion> suggestScenariosForPage(
+            @PathVariable String id,
+            @RequestParam String sayfa) {
+        Run run = runStore.get(id);
+        if (run == null) {
+            throw new RuntimeException("Test bulunamadı: " + id);
+        }
+        List<ScenarioSuggestion> newOnes = llmAgent.suggestScenariosForPage(run.getGoal(), run.getSteps(), sayfa);
+        List<ScenarioSuggestion> combined = new java.util.ArrayList<>();
+        if (run.getSuggestions() != null) {
+            combined.addAll(run.getSuggestions());
+        }
+        combined.addAll(newOnes);
+        run.setSuggestions(combined);
+        runStore.save(run);
+        return combined;
+    }
     @GetMapping
     public List<Run> listRuns() {
         return runStore.getAll();
@@ -57,12 +74,20 @@ public class RunController {
         return run;
     }
     @GetMapping("/{id}/suggestions")
-    public List<ScenarioSuggestion> suggestScenarios(@PathVariable String id) {
+    public List<ScenarioSuggestion> suggestScenarios(
+            @PathVariable String id,
+            @RequestParam(defaultValue = "false") boolean refresh) {
         Run run = runStore.get(id);
         if (run == null) {
             throw new RuntimeException("Test bulunamadı: " + id);
         }
-        return llmAgent.suggestScenarios(run.getGoal(), run.getSteps());
+        if (!refresh && run.getSuggestions() != null && !run.getSuggestions().isEmpty()) {
+            return run.getSuggestions();
+        }
+        List<ScenarioSuggestion> result = llmAgent.suggestScenarios(run.getGoal(), run.getSteps());
+        run.setSuggestions(result);
+        runStore.save(run);
+        return result;
     }
 
     @PostMapping("/{id}/stop")
@@ -92,8 +117,7 @@ public class RunController {
                 System.out.println("=== FİLTRELENMİŞ XML (adım " + i + ") ===\n" + filteredPageSource);
 
                 AgentAction action = llmAgent.decideNextAction(run.getGoal(), variables, screenshot, filteredPageSource, i, run.getSteps());
-                String currentSignature = action.getAction() + "|" + action.getTarget();
-                if (currentSignature.equals(lastActionSignature)) {
+                String currentSignature = action.getAction() + "|" + action.getTarget() + "|" + filteredPageSource.hashCode();                if (currentSignature.equals(lastActionSignature)) {
                     repeatCount++;
                 } else {
                     repeatCount = 0;
@@ -123,8 +147,22 @@ public class RunController {
 
                     }
                     case "type" -> {
-                        run.getSteps().add(new RunStep(i, "type", action.getTarget(), action.getReasoning()));
-                        appiumDriverManager.typeText(action.getX(), action.getY(), action.getText());
+                        if (!appiumDriverManager.isValidCoordinate(rawPageSource, action.getX(), action.getY())) {
+                            run.getSteps().add(new RunStep(i, "type", action.getTarget(), "GEÇERSİZ KOORDİNAT, adım atlanıyor"));
+                            runStore.save(run);
+                            Thread.sleep(500);
+                            continue;
+                        }
+                        try {
+                            run.getSteps().add(new RunStep(i, "type", action.getTarget(), action.getReasoning()));
+                            appiumDriverManager.typeText(action.getX(), action.getY(), action.getText());
+                        } catch (Exception typeEx) {
+                            run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
+                                    "Alana yazılamadı (odak oturmadı): " + typeEx.getMessage()));
+                            runStore.save(run);
+                            Thread.sleep(500);
+                            continue;
+                        }
                     }
                     case "swipe" -> appiumDriverManager.swipe(action.getDirection());
                     case "wait" -> Thread.sleep(1500);

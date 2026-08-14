@@ -31,7 +31,7 @@ public class LlmAgent {
 
     private final OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
             .build();
 
     private final ObjectMapper mapper = new ObjectMapper();
@@ -65,8 +65,7 @@ public class LlmAgent {
 
             KESİN KURAL: Koordinatları SADECE sana verilen XML'deki gerçek bounds değerlerinden hesapla.
             ASLA tahmin etme, uydurma. Eğer XML'de hedefe uygun bir bounds bulamıyorsan, action=fail döndür.
-            Ekran görüntüsünü de XML ile birlikte doğrulama amacıyla kullan - XML'de bulduğun elementin
-            görüntüde de mantıklı bir yerde olduğunu teyit et.
+ 
 
             KARAR ALGORİTMASI (sırayla dene):
             ÖNEMLİ - AYNI SEKMEYE TEKRAR GİTME: Bir önceki adımda bir gezinme/menü elementine (sekme, alt
@@ -83,6 +82,12 @@ public class LlmAgent {
             ÖNEMLİ - action=done KURALI: Sadece hedefin GERÇEKTEN tamamlandığına dair XML'de veya ekran
             görüntüsünde POZİTİF bir kanıt varsa action=done döndür. Belirsiz, tahmine dayalı gerekçelerle
             ASLA action=done döndürme. Emin değilsen ya farklı bir element dene ya da action=fail döndür.
+
+            ÖNEMLİ - POPUP/DIALOG ÖNCELİĞİ: Ekranda hedefe ulaşmanı engelleyen bir popup, dialog, bildirim izni,
+            onboarding/tanıtım ekranı ya da örtü (overlay) varsa, ÖNCE bunu kapatmayı dene - asıl hedefe yönelik
+            başka hiçbir aksiyon denemeden önce bunu yap. Bu tür ekranlarda genellikle "Kapat", "Close", "İptal",
+            "Tamam", "Devam et", "Skip", "Continue", "Got it", "Allow"/"Don't Allow", "Forward", "Next", "X"
+            işareti gibi elementler bulunur - bunlardan ilerlemeyi sağlayacak en mantıklı olanı seç ve ona tıkla.
 
             Kullanıcının tanımladığı test değişkenleri (varsa) sana ayrıca verilecek; bir giriş formunda
             mail/şifre gibi bir alan doldurman gerekiyorsa bu değişkenleri kullan.
@@ -111,15 +116,10 @@ public class LlmAgent {
             textNode.put("type", "text");
             textNode.put("text", context + historyText + "Hedef: " + goal + "\nBu " + stepNumber + ". adım. "
                     + "Ekrandaki XML ağacı:\n" + pageSource
-                    + "\n\nEkran görüntüsüne ve yukarıdaki XML'e bakarak bir sonraki aksiyonu belirle.");
+                    +"\n\nYukarıdaki XML'e bakarak bir sonraki aksiyonu belirle.");
             userContent.add(textNode);
 
-            var imageNode = mapper.createObjectNode();
-            imageNode.put("type", "image_url");
-            var imageUrlNode = mapper.createObjectNode();
-            imageUrlNode.put("url", "data:image/png;base64," + screenshotBase64);
-            imageNode.set("image_url", imageUrlNode);
-            userContent.add(imageNode);
+
 
             var messages = mapper.createArrayNode();
             var systemMsg = mapper.createObjectNode();
@@ -195,39 +195,8 @@ public class LlmAgent {
         return cleaned;
     }
 
-    public List<ScenarioSuggestion> suggestScenarios(String goal, List<RunStep> steps) {
+    private List<ScenarioSuggestion> callForSuggestions(String prompt, int maxTokens) {
         try {
-            StringBuilder visitedPages = new StringBuilder();
-            if (steps != null && !steps.isEmpty()) {
-                visitedPages.append("Test sırasında gerçekten gidilen sayfalar/elementler:\n");
-                for (RunStep s : steps) {
-                    if (s.getTarget() != null && !s.getTarget().isBlank()) {
-                        visitedPages.append("- ").append(s.getTarget()).append("\n");
-                    }
-                }
-                visitedPages.append("\n");
-            }
-
-            String prompt = """
-                Sen bir mobil QA test uzmanısın. Aşağıdaki test senaryosuna VE testin gerçekten uygulama
-                içinde gezindiği sayfalara/elementlere bakarak, bu akışla İLİŞKİLİ, test edilmesi faydalı
-                olacak 5 farklı EK senaryo öner. Her öneri şu kategorilerden birine ait olmalı:
-                "Negatif Test" (yanlış/hatalı girdi), "Sınır Durumu" (edge case, aşırı uzun metin,
-                özel karakter vb.), "Gezinme Çeşitliliği" (farklı bir yoldan aynı hedefe ulaşma) veya
-                "UX/Durum Kontrolü" (yükleme durumu, hata mesajı doğruluğu vb.).
-
-                Her öneri için kısa Türkçe bir senaryo cümlesi (mevcut format: "hesabıma git. yanlış
-                şifre ile giriş yapmayı dene." gibi), bir kategori ve bu senaryonun neden test edilmeye
-                değer olduğuna dair kısa bir gerekçe yaz.
-
-                SADECE aşağıdaki JSON formatında bir dizi döndür, başka hiçbir açıklama ekleme:
-                [{"senaryo": "...", "kategori": "...", "neden": "..."}, ...]
-
-                Orijinal test senaryosu: "%s"
-
-                %s
-                """.formatted(goal, visitedPages);
-
             var messages = mapper.createArrayNode();
             var userMsg = mapper.createObjectNode();
             userMsg.put("role", "user");
@@ -237,7 +206,7 @@ public class LlmAgent {
             var body = mapper.createObjectNode();
             body.put("model", model);
             body.set("messages", messages);
-            body.put("max_tokens", 800);
+            body.put("max_tokens", maxTokens);
 
             RequestBody requestBody = RequestBody.create(
                     mapper.writeValueAsString(body),
@@ -267,7 +236,86 @@ public class LlmAgent {
             throw new RuntimeException("Senaryo önerisi alınırken hata oluştu", e);
         }
     }
+    public List<ScenarioSuggestion> suggestScenarios(String goal, List<RunStep> steps) {
+        StringBuilder visitedPages = new StringBuilder();
+        if (steps != null && !steps.isEmpty()) {
+            visitedPages.append("Test sırasında gerçekten gidilen sayfalar/elementler:\n");
+            for (RunStep s : steps) {
+                if (s.getTarget() != null && !s.getTarget().isBlank()) {
+                    visitedPages.append("- ").append(s.getTarget()).append("\n");
+                }
+            }
+            visitedPages.append("\n");
+        }
 
+        String prompt = """
+            Sen bir mobil QA test uzmanısın. Aşağıdaki test senaryosuna VE testin gerçekten uygulama
+            içinde gezindiği sayfalara/elementlere bakarak, bu akışla İLİŞKİLİ, test edilmesi faydalı
+            olacak 15 farklı EK senaryo öner. Sadece kalıp/genel senaryolar üretme - gördüğün sayfadaki HER
+            somut elemente (menü öğeleri, butonlar, alanlar, form kuralları) tek tek bakarak, bu akışta
+            gerçekten oluşabilecek TÜM olası senaryoları sistemli ve kapsamlı şekilde tara. Amacın sadece
+            ilk akla gelen birkaç fikri değil, bu akışın kapsayabileceği farklı durumların tamamını
+            (her sayfa için en az bir tane olacak şekilde) ortaya çıkarmak.
+
+            Her öneri şu kategorilerden birine ait olmalı: "Negatif Test" (yanlış/hatalı girdi),
+            "Sınır Durumu" (edge case, aşırı uzun metin, özel karakter vb.), "Gezinme Çeşitliliği"
+            (farklı bir yoldan aynı hedefe ulaşma), "UX/Durum Kontrolü" (yükleme durumu, hata mesajı
+            doğruluğu vb.), "Performans" (yavaş bağlantı, arka arkaya hızlı tıklama vb.) veya
+            "Erişilebilirlik" (ekran okuyucu, büyük yazı tipi vb.).
+
+            Her öneri için:
+            - "senaryo": kısa Türkçe bir test cümlesi (mevcut format: "hesabıma git. yanlış şifre ile giriş yapmayı dene." gibi)
+            - "kategori": yukarıdaki kategorilerden biri
+            - "sayfa": bu senaryonun hangi ekran/sayfa ile ilgili olduğu (gezinme geçmişindeki gerçek sayfa isimlerine göre belirle)
+            - "neden": bu senaryonun neden test edilmeye değer olduğuna dair kısa bir gerekçe
+
+            SADECE aşağıdaki JSON formatında bir dizi döndür, başka hiçbir açıklama ekleme:
+            [{"senaryo": "...", "kategori": "...", "sayfa": "...", "neden": "..."}, ...]
+
+            Orijinal test senaryosu: "%s"
+
+            %s
+            """.formatted(goal, visitedPages);
+
+        return callForSuggestions(prompt, 6000);
+    }
+    public List<ScenarioSuggestion> suggestScenariosForPage(String goal, List<RunStep> steps, String pageName) {
+        StringBuilder visitedPages = new StringBuilder();
+        if (steps != null && !steps.isEmpty()) {
+            visitedPages.append("Test sırasında gerçekten gidilen sayfalar/elementler:\n");
+            for (RunStep s : steps) {
+                if (s.getTarget() != null && !s.getTarget().isBlank()) {
+                    visitedPages.append("- ").append(s.getTarget()).append("\n");
+                }
+            }
+            visitedPages.append("\n");
+        }
+
+        String prompt = """
+            Sen bir mobil QA test uzmanısın. Kullanıcı özellikle "%s" sayfası/ekranı için EK test
+            senaryoları istiyor. Aşağıdaki orijinal test akışına ve gezinme geçmişine bakarak, "%s"
+            sayfasıyla ilgili 3 farklı, birbirinden farklı senaryo öner. Sadece kalıp senaryolar
+            üretme - bu sayfada gerçekten karşılaşılabilecek somut durumları düşün.
+
+            Her öneri şu kategorilerden birine ait olmalı: "Negatif Test", "Sınır Durumu",
+            "Gezinme Çeşitliliği", "UX/Durum Kontrolü", "Performans", "Erişilebilirlik".
+
+            Her öneri için:
+            - "senaryo": kısa Türkçe bir test cümlesi
+            - "kategori": yukarıdaki kategorilerden biri
+            - "sayfa": her zaman "%s" olarak doldur
+            - "neden": bu senaryonun neden test edilmeye değer olduğuna dair kısa bir gerekçe
+
+            SADECE aşağıdaki JSON formatında bir dizi döndür, başka hiçbir açıklama ekleme:
+            [{"senaryo": "...", "kategori": "...", "sayfa": "%s", "neden": "..."}, ...]
+
+            Orijinal test senaryosu: "%s"
+
+            %s
+            """.formatted(pageName, pageName, pageName, pageName, goal, visitedPages);
+
+        return callForSuggestions(prompt, 3000);
+    }
     private String extractJsonArray(String content) {
         if (content == null) return "[]";
         String cleaned = content.trim();

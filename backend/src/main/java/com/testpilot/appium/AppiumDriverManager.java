@@ -9,7 +9,8 @@ import org.openqa.selenium.interactions.PointerInput;
 import org.openqa.selenium.interactions.Sequence;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
+import io.appium.java_client.android.nativekey.AndroidKey;
+import io.appium.java_client.android.nativekey.KeyEvent;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.time.Duration;
@@ -216,11 +217,26 @@ public class AppiumDriverManager {
     public void typeText(int x, int y, String text) {
         tap(x, y);
         try {
-            Thread.sleep(400); // klavye açılıp odaklanması için kısa bekleme
+            Thread.sleep(600);
         } catch (InterruptedException ignored) {}
-        driver.switchTo().activeElement().sendKeys(text);
-    }
 
+        try {
+            driver.switchTo().activeElement().sendKeys(text);
+        } catch (Exception e) {
+            try {
+                Thread.sleep(800);
+                driver.switchTo().activeElement().sendKeys(text);
+            } catch (Exception e2) {
+                throw new RuntimeException("Input alanına yazılamadı: " + e2.getMessage(), e2);
+            }
+        }
+
+        try {
+            Thread.sleep(300);
+            driver.pressKey(new KeyEvent(AndroidKey.ENTER));
+        } catch (Exception ignored) {
+        }
+    }
     public void invalidateSession() {
         driver = null;
     }
