@@ -1,9 +1,13 @@
 package com.testpilot.appium;
 
+import io.appium.java_client.AppiumDriver;
+import io.appium.java_client.InteractsWithApps;
 import io.appium.java_client.android.AndroidDriver;
 import io.appium.java_client.android.options.UiAutomator2Options;
 import io.appium.java_client.android.nativekey.AndroidKey;
 import io.appium.java_client.android.nativekey.KeyEvent;
+import io.appium.java_client.ios.IOSDriver;
+import io.appium.java_client.ios.options.XCUITestOptions;
 import org.openqa.selenium.Dimension;
 import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.OutputType;
@@ -33,33 +37,53 @@ public class AppiumDriverManager {
     @Value("${android.app-activity:}")
     private String defaultAppActivity;
 
-    private AndroidDriver driver;
+    @Value("${ios.simulator-device-name:iPhone 15}")
+    private String iosDeviceName;
 
-    public AndroidDriver startSession(String appIdentifier, String appActivity) {
+    @Value("${ios.platform-version:17.5}")
+    private String iosPlatformVersion;
+
+    private AppiumDriver driver;
+
+    public AppiumDriver startSession(String platform, String appIdentifier, String appActivity) {
         if (driver != null) {
             return driver;
         }
 
         try {
-            String pkg = (appIdentifier != null && !appIdentifier.isBlank()) ? appIdentifier : defaultAppPackage;
-            String activity = (appActivity != null && !appActivity.isBlank()) ? appActivity : defaultAppActivity;
+            if ("ios".equalsIgnoreCase(platform)) {
+                XCUITestOptions options = new XCUITestOptions()
+                        .setDeviceName(iosDeviceName)
+                        .setPlatformVersion(iosPlatformVersion)
+                        .setBundleId(appIdentifier)
+                        .setAutoAcceptAlerts(true);
+                driver = new IOSDriver(new URL(appiumServerUrl), options);
+            } else {
+                String pkg = (appIdentifier != null && !appIdentifier.isBlank()) ? appIdentifier : defaultAppPackage;
+                String activity = (appActivity != null && !appActivity.isBlank()) ? appActivity : defaultAppActivity;
 
-            UiAutomator2Options options = new UiAutomator2Options()
-                    .setDeviceName("emulator-5554")
-                    .setAppPackage(pkg)
-                    .setAppActivity(activity)
-                    .setAutoGrantPermissions(true)
-                    .setNoReset(true);
-            driver = new AndroidDriver(new URL(appiumServerUrl), options);
+                UiAutomator2Options options = new UiAutomator2Options()
+                        .setDeviceName("emulator-5554")
+                        .setAppPackage(pkg)
+                        .setAppActivity(activity)
+                        .setAutoGrantPermissions(true)
+                        .setNoReset(true);
+                driver = new AndroidDriver(new URL(appiumServerUrl), options);
+            }
         } catch (MalformedURLException e) {
             throw new RuntimeException("Appium sunucu adresi hatalı: " + appiumServerUrl, e);
         }
         return driver;
     }
 
-    public void resetToFreshState(String appIdentifier) {
-        ((JavascriptExecutor) driver).executeScript("mobile: clearApp", Map.of("appId", appIdentifier));
-        driver.activateApp(appIdentifier);
+    public void resetToFreshState(String platform, String appIdentifier) {
+        if ("ios".equalsIgnoreCase(platform)) {
+            ((InteractsWithApps) driver).terminateApp(appIdentifier);
+            ((InteractsWithApps) driver).activateApp(appIdentifier);
+        } else {
+            ((JavascriptExecutor) driver).executeScript("mobile: clearApp", Map.of("appId", appIdentifier));
+            ((InteractsWithApps) driver).activateApp(appIdentifier);
+        }
     }
 
     public String takeScreenshotBase64() {
@@ -84,10 +108,18 @@ public class AppiumDriverManager {
         while (tagMatcher.find()) {
             String tag = tagMatcher.group();
 
-            boolean clickable = tag.contains("clickable=\"true\"");
+            boolean clickable = tag.contains("clickable=\"true\"") || tag.contains("accessible=\"true\"");
+
             String text = extractAttr(tag, "text");
+            if (text == null) text = extractAttr(tag, "value");
+
             String desc = extractAttr(tag, "content-desc");
+            if (desc == null) desc = extractAttr(tag, "label");
+            if (desc == null) desc = extractAttr(tag, "name");
+
             String bounds = extractAttr(tag, "bounds");
+            if (bounds == null) bounds = buildBoundsFromXYWH(tag);
+
             boolean hasLabel = (text != null && !text.isBlank()) || (desc != null && !desc.isBlank());
 
             if (bounds == null) continue;
@@ -116,6 +148,7 @@ public class AppiumDriverManager {
         return result.toString();
     }
 
+
     private String extractAttr(String tag, String attrName) {
         Pattern p = Pattern.compile(attrName + "=\"([^\"]*)\"");
         Matcher m = p.matcher(tag);
@@ -124,21 +157,45 @@ public class AppiumDriverManager {
         }
         return null;
     }
+        private String buildBoundsFromXYWH(String tag) {
+            String xStr = extractAttr(tag, "x");
+            String yStr = extractAttr(tag, "y");
+            String wStr = extractAttr(tag, "width");
+            String hStr = extractAttr(tag, "height");
+            if (xStr == null || yStr == null || wStr == null || hStr == null) return null;
+            try {
+                int x = (int) Double.parseDouble(xStr);
+                int y = (int) Double.parseDouble(yStr);
+                int w = (int) Double.parseDouble(wStr);
+                int h = (int) Double.parseDouble(hStr);
+                if (w <= 0 || h <= 0) return null;
+                return "[" + x + "," + y + "][" + (x + w) + "," + (y + h) + "]";
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
 
     public boolean isValidCoordinate(String rawPageSource, int x, int y) {
         if (rawPageSource == null) return false;
 
-        Pattern boundsPattern = Pattern.compile("bounds=\"\\[(\\d+),(\\d+)]\\[(\\d+),(\\d+)]\"");
-        Matcher m = boundsPattern.matcher(rawPageSource);
+        Pattern tagPattern = Pattern.compile("<[^<>]+/>");
+        Matcher tagMatcher = tagPattern.matcher(rawPageSource);
 
-        while (m.find()) {
-            int x1 = Integer.parseInt(m.group(1));
-            int y1 = Integer.parseInt(m.group(2));
-            int x2 = Integer.parseInt(m.group(3));
-            int y2 = Integer.parseInt(m.group(4));
+        while (tagMatcher.find()) {
+            String tag = tagMatcher.group();
+            String bounds = extractAttr(tag, "bounds");
+            if (bounds == null) bounds = buildBoundsFromXYWH(tag);
+            if (bounds == null) continue;
 
-            if (x >= x1 && x <= x2 && y >= y1 && y <= y2) {
-                return true;
+            Matcher bm = Pattern.compile("\\[(-?\\d+),(-?\\d+)]\\[(-?\\d+),(-?\\d+)]").matcher(bounds);
+            if (bm.find()) {
+                int x1 = Integer.parseInt(bm.group(1));
+                int y1 = Integer.parseInt(bm.group(2));
+                int x2 = Integer.parseInt(bm.group(3));
+                int y2 = Integer.parseInt(bm.group(4));
+                if (x >= x1 && x <= x2 && y >= y1 && y <= y2) {
+                    return true;
+                }
             }
         }
         return false;
@@ -222,7 +279,9 @@ public class AppiumDriverManager {
 
         try {
             Thread.sleep(300);
-            driver.pressKey(new KeyEvent(AndroidKey.ENTER));
+            if (driver instanceof AndroidDriver androidDriver) {
+                androidDriver.pressKey(new KeyEvent(AndroidKey.ENTER));
+            }
         } catch (Exception ignored) {
         }
     }

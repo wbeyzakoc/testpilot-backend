@@ -38,10 +38,12 @@ public class RunController {
         this.llmAgent = llmAgent;
         this.runStore = runStore;
     }
+
     @DeleteMapping("/{id}")
     public void deleteRun(@PathVariable String id) {
         runStore.delete(id);
     }
+
     @PostMapping
     public Run createRun(@RequestBody TestRequest request) {
         Run run = new Run();
@@ -53,10 +55,11 @@ public class RunController {
         run.setStartedAt(Instant.now().toString());
         runStore.save(run);
 
-        new Thread(() -> executeRun(run, request.getVariables(), request.getAppPackage(), request.getAppActivity())).start();
+        new Thread(() -> executeRun(run, request.getVariables(), request.getPlatform(), request.getAppPackage(), request.getAppActivity())).start();
 
         return run;
     }
+
     @PostMapping("/{id}/suggestions/page")
     public List<ScenarioSuggestion> suggestScenariosForPage(
             @PathVariable String id,
@@ -75,6 +78,7 @@ public class RunController {
         runStore.save(run);
         return combined;
     }
+
     @GetMapping
     public List<Run> listRuns() {
         return runStore.getAll();
@@ -86,6 +90,7 @@ public class RunController {
         if (run == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Run bulunamadı");
         return run;
     }
+
     @GetMapping("/{id}/suggestions")
     public List<ScenarioSuggestion> suggestScenarios(
             @PathVariable String id,
@@ -109,11 +114,18 @@ public class RunController {
         if (run != null) run.setStopRequested(true);
     }
 
-    private void executeRun(Run run, Map<String, String> variables, String appPackage, String appActivity) {
+    private void executeRun(Run run, Map<String, String> variables, String platform, String appPackage, String appActivity) {
         int consecutiveFails = 0;
         try {
-            appiumDriverManager.startSession(appPackage, appActivity);
-            appiumDriverManager.resetToFreshState(appPackage);
+            try {
+                appiumDriverManager.startSession(platform, appPackage, appActivity);
+                appiumDriverManager.resetToFreshState(platform, appPackage);
+            } catch (Exception sessionEx) {
+                appiumDriverManager.invalidateSession();
+                appiumDriverManager.startSession(platform, appPackage, appActivity);
+                appiumDriverManager.resetToFreshState(platform, appPackage);
+            }
+            Thread.sleep(2500);
             String lastActionSignature = null;
             int repeatCount = 0;
             for (int i = 1; i <= MAX_STEPS; i++) {
@@ -147,7 +159,8 @@ public class RunController {
                     continue;
                 }
 
-                String currentSignature = action.getAction() + "|" + action.getTarget() + "|" + filteredPageSource.hashCode();                if (currentSignature.equals(lastActionSignature)) {
+                String currentSignature = action.getAction() + "|" + action.getTarget() + "|" + filteredPageSource.hashCode();
+                if (currentSignature.equals(lastActionSignature)) {
                     repeatCount++;
                 } else {
                     repeatCount = 0;
@@ -229,7 +242,8 @@ public class RunController {
                 Thread.sleep(800);
             }
             run.setStatus("failed");
-            run.setError("Maksimum adım sayısına ulaşıldı");
+            String lastTarget = run.getSteps().isEmpty() ? "bilinmiyor" : run.getSteps().get(run.getSteps().size() - 1).getTarget();
+            run.setError("Maksimum adım sayısına (" + MAX_STEPS + ") ulaşıldı, hedef tamamlanamadan test sonlandırıldı. Son denenen: " + lastTarget);
             run.setFinishedAt(Instant.now().toString());
             runStore.save(run);
         } catch (Exception e) {
