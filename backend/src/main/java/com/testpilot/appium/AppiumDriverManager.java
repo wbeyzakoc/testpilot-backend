@@ -15,11 +15,20 @@ import org.openqa.selenium.interactions.PointerInput;
 import org.openqa.selenium.interactions.Sequence;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
+import io.appium.java_client.ios.IOSDriver;
+import io.appium.java_client.ios.options.XCUITestOptions;
+import io.appium.java_client.screenrecording.CanRecordScreen;
+import org.openqa.selenium.Dimension;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.concurrent.TimeUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -42,6 +51,8 @@ public class AppiumDriverManager {
 
     @Value("${ios.platform-version:17.5}")
     private String iosPlatformVersion;
+
+
 
     private AppiumDriver driver;
 
@@ -296,4 +307,38 @@ public class AppiumDriverManager {
             driver = null;
         }
     }
+
+    public void startScreenRecording() {
+        try {
+            ((CanRecordScreen) driver).startRecordingScreen();
+        } catch (Exception e) {
+            System.out.println("Ekran kaydı başlatılamadı: " + e.getMessage());
+        }
+    }
+
+    public boolean stopScreenRecordingAndSave(String runId) {
+        try {
+            String base64Video = ((CanRecordScreen) driver).stopRecordingScreen();
+            if (base64Video == null || base64Video.isBlank()) return false;
+            byte[] videoBytes = Base64.getDecoder().decode(base64Video);
+            Path dir = Paths.get("videos");
+            Files.createDirectories(dir);
+            Files.write(dir.resolve(runId + ".mp4"), videoBytes);
+            return true;
+        } catch (Exception e) {
+            System.out.println("Ekran kaydı kaydedilemedi: " + e.getMessage());
+            return false;
+        }
+    }
+
+    public byte[] readVideo(String runId) {
+        try {
+            Path path = Paths.get("videos", runId + ".mp4");
+            if (!Files.exists(path)) return null;
+            return Files.readAllBytes(path);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
 }

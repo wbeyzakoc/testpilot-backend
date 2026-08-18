@@ -43,4 +43,12 @@ public class Run {//bir testin tüm durumu
     public void setSuggestions(List<ScenarioSuggestion> suggestions) { this.suggestions = suggestions; }
     public String getAppPackage() { return appPackage; }
     public void setAppPackage(String appPackage) { this.appPackage = appPackage; }
+
+    private String failureScreenshot;
+    private boolean hasVideo;
+
+    public String getFailureScreenshot() { return failureScreenshot; }
+    public void setFailureScreenshot(String failureScreenshot) { this.failureScreenshot = failureScreenshot; }
+    public boolean isHasVideo() { return hasVideo; }
+    public void setHasVideo(boolean hasVideo) { this.hasVideo = hasVideo; }
 }

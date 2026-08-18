@@ -1,4 +1,6 @@
 package com.testpilot.controller;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 
 import com.testpilot.agent.LlmAgent;
 import com.testpilot.agent.RunStore;
@@ -7,7 +9,7 @@ import com.testpilot.model.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
-
+import java.util.concurrent.ConcurrentHashMap;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +34,7 @@ public class RunController {
     private final AppiumDriverManager appiumDriverManager;
     private final LlmAgent llmAgent;
     private final RunStore runStore;
+    private final Map<String, String> liveScreenshots = new ConcurrentHashMap<>();
 
     public RunController(AppiumDriverManager appiumDriverManager, LlmAgent llmAgent, RunStore runStore) {
         this.appiumDriverManager = appiumDriverManager;
@@ -55,7 +58,7 @@ public class RunController {
         run.setStartedAt(Instant.now().toString());
         runStore.save(run);
 
-        new Thread(() -> executeRun(run, request.getVariables(), request.getPlatform(), request.getAppPackage(), request.getAppActivity())).start();
+        new Thread(() -> executeRun(run, request.getVariables(), request.getPlatform(), request.getAppPackage(), request.getAppActivity(), request.isCaptureScreenshot(), request.isRecordVideo())).start();
 
         return run;
     }
@@ -91,6 +94,16 @@ public class RunController {
         return run;
     }
 
+    @GetMapping("/{id}/screenshot")
+    public Map<String, String> getScreenshot(@PathVariable String id) {
+        String screenshot = liveScreenshots.get(id);
+        if (screenshot == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Henüz ekran görüntüsü yok");
+        }
+        return Map.of("screenshot", screenshot);
+    }
+
+
     @GetMapping("/{id}/suggestions")
     public List<ScenarioSuggestion> suggestScenarios(
             @PathVariable String id,
@@ -114,8 +127,9 @@ public class RunController {
         if (run != null) run.setStopRequested(true);
     }
 
-    private void executeRun(Run run, Map<String, String> variables, String platform, String appPackage, String appActivity) {
+    private void executeRun(Run run, Map<String, String> variables, String platform, String appPackage, String appActivity, boolean captureScreenshot, boolean recordVideo) {
         int consecutiveFails = 0;
+        String screenshot = null;
         try {
             try {
                 appiumDriverManager.startSession(platform, appPackage, appActivity);
@@ -126,6 +140,9 @@ public class RunController {
                 appiumDriverManager.resetToFreshState(platform, appPackage);
             }
             Thread.sleep(2500);
+            if (recordVideo) {
+                appiumDriverManager.startScreenRecording();
+            }
             String lastActionSignature = null;
             int repeatCount = 0;
             for (int i = 1; i <= MAX_STEPS; i++) {
@@ -136,7 +153,8 @@ public class RunController {
                     return;
                 }
 
-                String screenshot = appiumDriverManager.takeScreenshotBase64();
+                screenshot = appiumDriverManager.takeScreenshotBase64();
+                liveScreenshots.put(run.getId(), screenshot);
                 String rawPageSource = appiumDriverManager.getPageSource();
                 String filteredPageSource = appiumDriverManager.filterPageSource(rawPageSource);
                 System.out.println("=== FİLTRELENMİŞ XML (adım " + i + ") ===\n" + filteredPageSource);
@@ -173,6 +191,7 @@ public class RunController {
                     run.setStatus("failed");
                     run.setError("Model aynı elemente tekrar tekrar tıklayıp döngüye girdi");
                     run.setFinishedAt(java.time.Instant.now().toString());
+                    if (captureScreenshot) run.setFailureScreenshot(screenshot);
                     runStore.save(run);
                     return;
                 }
@@ -224,6 +243,7 @@ public class RunController {
                             run.setStatus("failed");
                             run.setError(action.getReasoning());
                             run.setFinishedAt(Instant.now().toString());
+                            if (captureScreenshot) run.setFailureScreenshot(screenshot);
                             runStore.save(run);
                             return;
                         }
@@ -245,6 +265,7 @@ public class RunController {
             String lastTarget = run.getSteps().isEmpty() ? "bilinmiyor" : run.getSteps().get(run.getSteps().size() - 1).getTarget();
             run.setError("Maksimum adım sayısına (" + MAX_STEPS + ") ulaşıldı, hedef tamamlanamadan test sonlandırıldı. Son denenen: " + lastTarget);
             run.setFinishedAt(Instant.now().toString());
+            if (captureScreenshot) run.setFailureScreenshot(screenshot);
             runStore.save(run);
         } catch (Exception e) {
             e.printStackTrace();
@@ -252,7 +273,17 @@ public class RunController {
             run.setStatus("error");
             run.setError(e.getMessage());
             run.setFinishedAt(Instant.now().toString());
+            if (captureScreenshot) run.setFailureScreenshot(screenshot);
             runStore.save(run);
+        } finally {
+            liveScreenshots.remove(run.getId());
+            if (recordVideo) {
+                boolean saved = appiumDriverManager.stopScreenRecordingAndSave(run.getId());
+                if (saved) {
+                    run.setHasVideo(true);
+                    runStore.save(run);
+                }
+            }
         }
     }
 }
