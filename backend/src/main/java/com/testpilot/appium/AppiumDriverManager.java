@@ -1,5 +1,5 @@
 package com.testpilot.appium;
-
+import java.time.Duration;
 import io.appium.java_client.AppiumDriver;
 import io.appium.java_client.InteractsWithApps;
 import io.appium.java_client.android.AndroidDriver;
@@ -67,7 +67,8 @@ public class AppiumDriverManager {
                         .setDeviceName(iosDeviceName)
                         .setPlatformVersion(iosPlatformVersion)
                         .setBundleId(appIdentifier)
-                        .setAutoAcceptAlerts(true);
+                        .setAutoAcceptAlerts(true)
+                        .setNewCommandTimeout(Duration.ofSeconds(300));
                 driver = new IOSDriver(new URL(appiumServerUrl), options);
             } else {
                 String pkg = (appIdentifier != null && !appIdentifier.isBlank()) ? appIdentifier : defaultAppPackage;
@@ -78,7 +79,8 @@ public class AppiumDriverManager {
                         .setAppPackage(pkg)
                         .setAppActivity(activity)
                         .setAutoGrantPermissions(true)
-                        .setNoReset(true);
+                        .setNoReset(true)
+                        .setNewCommandTimeout(Duration.ofSeconds(300));
                 driver = new AndroidDriver(new URL(appiumServerUrl), options);
             }
         } catch (MalformedURLException e) {

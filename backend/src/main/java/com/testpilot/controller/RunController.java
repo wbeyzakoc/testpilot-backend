@@ -54,6 +54,12 @@ public class RunController {
         run.setGoal(request.getGoal());
         run.setAppPackage(request.getAppPackage());
         run.setAppActivity(request.getAppActivity());
+        run.setPlatform(request.getPlatform());
+        run.setVariables(request.getVariables());
+        run.setPlatform(request.getPlatform());
+        run.setVariables(request.getVariables());
+        run.setCaptureScreenshot(request.isCaptureScreenshot());
+        run.setRecordVideo(request.isRecordVideo());
         run.setStatus("running");
         run.setStartedAt(Instant.now().toString());
         runStore.save(run);
