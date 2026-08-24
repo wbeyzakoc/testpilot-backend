@@ -2,6 +2,7 @@ package com.testpilot.model;
 
 import java.util.Map;
 public class TestRequest {
+    private String name;
     private String goal;
     private Map<String, String> variables;
     private String appPackage;
@@ -9,9 +10,12 @@ public class TestRequest {
     private String platform;
     private boolean captureScreenshot;
     private boolean recordVideo;
+    private boolean parallel;
 
     public String getPlatform() { return platform; }
     public void setPlatform(String platform) { this.platform = platform; }
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
     public String getGoal() { return goal; }
     public void setGoal(String goal) { this.goal = goal; }
     public Map<String, String> getVariables() { return variables; }
@@ -24,4 +28,6 @@ public class TestRequest {
     public void setCaptureScreenshot(boolean captureScreenshot) { this.captureScreenshot = captureScreenshot; }
     public boolean isRecordVideo() { return recordVideo; }
     public void setRecordVideo(boolean recordVideo) { this.recordVideo = recordVideo; }
+    public boolean isParallel() { return parallel; }
+    public void setParallel(boolean parallel) { this.parallel = parallel; }
 }

@@ -25,6 +25,15 @@ public class RunController {
             "learn more", "daha fazla bilgi", "hakkında", "detaylar", "more info", "öğren", "about"
     );
 
+    // Test adı boş bırakılırsa (kullanıcı yazmadıysa) goal'dan kısa bir isim türetilir,
+    // böylece history'de her satır "giriş yap" gibi ayırt edilemez kalmaz.
+    private String resolveName(String name, String goal) {
+        if (name != null && !name.isBlank()) return name.trim();
+        if (goal == null || goal.isBlank()) return "İsimsiz Test";
+        String trimmed = goal.trim();
+        return trimmed.length() > 60 ? trimmed.substring(0, 60) + "…" : trimmed;
+    }
+
     private boolean isInformationalLink(String target) {
         if (target == null) return false;
         String t = target.toLowerCase();
@@ -49,13 +58,16 @@ public class RunController {
 
     @PostMapping
     public Run createRun(@RequestBody TestRequest request) {
+        return launchRun(request);
+    }
+
+    public Run launchRun(TestRequest request) {
         Run run = new Run();
         run.setId(UUID.randomUUID().toString());
+        run.setName(resolveName(request.getName(), request.getGoal()));
         run.setGoal(request.getGoal());
         run.setAppPackage(request.getAppPackage());
         run.setAppActivity(request.getAppActivity());
-        run.setPlatform(request.getPlatform());
-        run.setVariables(request.getVariables());
         run.setPlatform(request.getPlatform());
         run.setVariables(request.getVariables());
         run.setCaptureScreenshot(request.isCaptureScreenshot());
@@ -64,11 +76,18 @@ public class RunController {
         run.setStartedAt(Instant.now().toString());
         runStore.save(run);
 
-        new Thread(() -> executeRun(run, request.getVariables(), request.getPlatform(), request.getAppPackage(), request.getAppActivity(), request.isCaptureScreenshot(), request.isRecordVideo())).start();
-
+        new Thread(() -> executeRun(run, request.getVariables(), request.getPlatform(), request.getAppPackage(), request.getAppActivity(), request.isCaptureScreenshot(), request.isRecordVideo(), request.isParallel())).start();
         return run;
     }
 
+    @PostMapping("/{id}/nightly")
+    public Run setNightlySuite(@PathVariable String id, @RequestBody Map<String, Boolean> body) {
+        Run run = runStore.get(id);
+        if (run == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Run bulunamadı");
+        run.setNightlySuite(Boolean.TRUE.equals(body.get("enabled")));
+        runStore.save(run);
+        return run;
+    }
     @PostMapping("/{id}/suggestions/page")
     public List<ScenarioSuggestion> suggestScenariosForPage(
             @PathVariable String id,
@@ -109,7 +128,6 @@ public class RunController {
         return Map.of("screenshot", screenshot);
     }
 
-
     @GetMapping("/{id}/suggestions")
     public List<ScenarioSuggestion> suggestScenarios(
             @PathVariable String id,
@@ -133,21 +151,20 @@ public class RunController {
         if (run != null) run.setStopRequested(true);
     }
 
-    private void executeRun(Run run, Map<String, String> variables, String platform, String appPackage, String appActivity, boolean captureScreenshot, boolean recordVideo) {
-        int consecutiveFails = 0;
+    private void executeRun(Run run, Map<String, String> variables, String platform, String appPackage, String appActivity, boolean captureScreenshot, boolean recordVideo, boolean parallel) {        int consecutiveFails = 0;
         String screenshot = null;
         try {
             try {
-                appiumDriverManager.startSession(platform, appPackage, appActivity);
-                appiumDriverManager.resetToFreshState(platform, appPackage);
+                appiumDriverManager.startSession(run.getId(), platform, appPackage, appActivity, parallel);
+                appiumDriverManager.resetToFreshState(run.getId(), platform, appPackage);
             } catch (Exception sessionEx) {
-                appiumDriverManager.invalidateSession();
-                appiumDriverManager.startSession(platform, appPackage, appActivity);
-                appiumDriverManager.resetToFreshState(platform, appPackage);
+                appiumDriverManager.invalidateSession(run.getId());
+                appiumDriverManager.startSession(run.getId(), platform, appPackage, appActivity, parallel);
+                appiumDriverManager.resetToFreshState(run.getId(), platform, appPackage);
             }
             Thread.sleep(2500);
             if (recordVideo) {
-                appiumDriverManager.startScreenRecording();
+                appiumDriverManager.startScreenRecording(run.getId());
             }
             String lastActionSignature = null;
             int repeatCount = 0;
@@ -159,9 +176,9 @@ public class RunController {
                     return;
                 }
 
-                screenshot = appiumDriverManager.takeScreenshotBase64();
+                screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
                 liveScreenshots.put(run.getId(), screenshot);
-                String rawPageSource = appiumDriverManager.getPageSource();
+                String rawPageSource = appiumDriverManager.getPageSource(run.getId());
                 String filteredPageSource = appiumDriverManager.filterPageSource(rawPageSource);
                 System.out.println("=== FİLTRELENMİŞ XML (adım " + i + ") ===\n" + filteredPageSource);
 
@@ -211,7 +228,7 @@ public class RunController {
                             continue;
                         }
                         run.getSteps().add(new RunStep(i, "tap", action.getTarget(), action.getReasoning()));
-                        appiumDriverManager.tap(action.getX(), action.getY());
+                        appiumDriverManager.tap(run.getId(), action.getX(), action.getY());
                         Thread.sleep(400); // geçiş animasyonunun oturması için ekstra bekleme
 
                     }
@@ -224,7 +241,7 @@ public class RunController {
                         }
                         try {
                             run.getSteps().add(new RunStep(i, "type", action.getTarget(), action.getReasoning()));
-                            appiumDriverManager.typeText(action.getX(), action.getY(), action.getText());
+                            appiumDriverManager.typeText(run.getId(), action.getX(), action.getY(), action.getText());
                         } catch (Exception typeEx) {
                             run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
                                     "Alana yazılamadı (odak oturmadı): " + typeEx.getMessage()));
@@ -233,7 +250,7 @@ public class RunController {
                             continue;
                         }
                     }
-                    case "swipe" -> appiumDriverManager.swipe(action.getDirection());
+                    case "swipe" -> appiumDriverManager.swipe(run.getId(), action.getDirection());
                     case "wait" -> Thread.sleep(1500);
                     case "done" -> {
                         run.getSteps().add(new RunStep(i, "done", null, action.getReasoning()));
@@ -275,7 +292,7 @@ public class RunController {
             runStore.save(run);
         } catch (Exception e) {
             e.printStackTrace();
-            appiumDriverManager.invalidateSession();
+            appiumDriverManager.invalidateSession(run.getId());
             run.setStatus("error");
             run.setError(e.getMessage());
             run.setFinishedAt(Instant.now().toString());
@@ -290,6 +307,7 @@ public class RunController {
                     runStore.save(run);
                 }
             }
+            appiumDriverManager.stopSession(run.getId());
         }
     }
 }

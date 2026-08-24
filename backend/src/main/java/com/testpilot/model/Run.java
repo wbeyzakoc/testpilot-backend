@@ -1,14 +1,15 @@
 package com.testpilot.model;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class Run {//bir testin tüm durumu
     private String id;
+    private String name;
     private String goal;
     private volatile String status; // "running" | "passed" | "failed" | "error" | "stopped"
-    private final List<RunStep> steps = new ArrayList<>();
+    private final List<RunStep> steps = new CopyOnWriteArrayList<>();
     private String error;
     private String startedAt;
     private String finishedAt;
@@ -16,6 +17,8 @@ public class Run {//bir testin tüm durumu
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
     public String getGoal() { return goal; }
     public void setGoal(String goal) { this.goal = goal; }
     public String getStatus() { return status; }
@@ -32,6 +35,11 @@ public class Run {//bir testin tüm durumu
     private String appPackage;
     private List<ScenarioSuggestion> suggestions;
     private String appActivity;
+
+    private boolean nightlySuite;
+
+    public boolean isNightlySuite() { return nightlySuite; }
+    public void setNightlySuite(boolean nightlySuite) { this.nightlySuite = nightlySuite; }
 
     public String getAppActivity() {
         return appActivity;

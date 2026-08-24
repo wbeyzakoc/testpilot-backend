@@ -1,5 +1,6 @@
 package com.testpilot.appium;
-import java.time.Duration;
+
+import io.appium.java_client.AppiumClientConfig;
 import io.appium.java_client.AppiumDriver;
 import io.appium.java_client.InteractsWithApps;
 import io.appium.java_client.android.AndroidDriver;
@@ -8,6 +9,7 @@ import io.appium.java_client.android.nativekey.AndroidKey;
 import io.appium.java_client.android.nativekey.KeyEvent;
 import io.appium.java_client.ios.IOSDriver;
 import io.appium.java_client.ios.options.XCUITestOptions;
+import io.appium.java_client.screenrecording.CanRecordScreen;
 import org.openqa.selenium.Dimension;
 import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.OutputType;
@@ -15,22 +17,19 @@ import org.openqa.selenium.interactions.PointerInput;
 import org.openqa.selenium.interactions.Sequence;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import io.appium.java_client.ios.IOSDriver;
-import io.appium.java_client.ios.options.XCUITestOptions;
-import io.appium.java_client.screenrecording.CanRecordScreen;
-import org.openqa.selenium.Dimension;
+
 import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.concurrent.TimeUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -39,6 +38,12 @@ public class AppiumDriverManager {
 
     @Value("${appium.server-url}")
     private String appiumServerUrl;
+
+    @Value("${appium.ios-server-url:${appium.server-url}}")
+    private String iosServerUrl;
+
+    @Value("${appium.grid-url:${appium.server-url}}")
+    private String gridUrl;
 
     @Value("${android.app-package:}")
     private String defaultAppPackage;
@@ -52,44 +57,103 @@ public class AppiumDriverManager {
     @Value("${ios.platform-version:17.5}")
     private String iosPlatformVersion;
 
+    // Her run kendi Appium session'ını (driver'ını) tutar - paralel koşum için
+    private final Map<String, AppiumDriver> drivers = new ConcurrentHashMap<>();
 
-
-    private AppiumDriver driver;
-
-    public AppiumDriver startSession(String platform, String appIdentifier, String appActivity) {
-        if (driver != null) {
-            return driver;
+  /*  public AppiumDriver startSession(String runId, String platform, String appIdentifier, String appActivity, boolean parallel) {
+        AppiumDriver existing = drivers.get(runId);
+        if (existing != null) {
+            return existing;
         }
 
+        AppiumDriver driver;
         try {
             if ("ios".equalsIgnoreCase(platform)) {
+                String targetUrl = parallel ? gridUrl : iosServerUrl;
                 XCUITestOptions options = new XCUITestOptions()
-                        .setDeviceName(iosDeviceName)
-                        .setPlatformVersion(iosPlatformVersion)
+                        .setPlatformName("iOS") // CRITICAL: Selenium Grid'in cihazı eşleştirmesi için zorunlu
+                        .setAutomationName("XCUITest")
+                   *//*     .setDeviceName(iosDeviceName)
+                        .setPlatformVersion(iosPlatformVersion)*//*
                         .setBundleId(appIdentifier)
                         .setAutoAcceptAlerts(true)
                         .setNewCommandTimeout(Duration.ofSeconds(300));
-                driver = new IOSDriver(new URL(appiumServerUrl), options);
+                AppiumClientConfig clientConfig = AppiumClientConfig.defaultConfig()
+                        .baseUri(URI.create(targetUrl))
+                        .readTimeout(Duration.ofMinutes(5));
+                driver = new IOSDriver(clientConfig, options);
             } else {
+                String targetUrl = parallel ? gridUrl : appiumServerUrl;
                 String pkg = (appIdentifier != null && !appIdentifier.isBlank()) ? appIdentifier : defaultAppPackage;
                 String activity = (appActivity != null && !appActivity.isBlank()) ? appActivity : defaultAppActivity;
 
                 UiAutomator2Options options = new UiAutomator2Options()
-                        .setDeviceName("emulator-5554")
                         .setAppPackage(pkg)
                         .setAppActivity(activity)
                         .setAutoGrantPermissions(true)
                         .setNoReset(true)
+                        .amend("shouldWaitForQuiescence", false)
+
                         .setNewCommandTimeout(Duration.ofSeconds(300));
-                driver = new AndroidDriver(new URL(appiumServerUrl), options);
+                driver = new AndroidDriver(new URL(targetUrl), options);
             }
         } catch (MalformedURLException e) {
             throw new RuntimeException("Appium sunucu adresi hatalı: " + appiumServerUrl, e);
         }
+
+        drivers.put(runId, driver);
+        return driver;
+    }
+*/
+  public AppiumDriver startSession(String runId, String platform, String appIdentifier, String appActivity, boolean parallel) {
+      AppiumDriver existing = drivers.get(runId);
+      if (existing != null) {
+          return existing;
+      }
+
+      AppiumDriver driver;
+      try {
+          if ("ios".equalsIgnoreCase(platform)) {
+              XCUITestOptions options = new XCUITestOptions()
+                      .setPlatformName("IOS")
+                      .setAutomationName("XCUITest")
+                      .setBundleId(appIdentifier)
+                      .setAutoAcceptAlerts(true)
+                      .setNewCommandTimeout(Duration.ofSeconds(300));
+
+              driver = new IOSDriver(new URL(gridUrl), options);
+          } else {
+              String pkg = (appIdentifier != null && !appIdentifier.isBlank()) ? appIdentifier : defaultAppPackage;
+              String activity = (appActivity != null && !appActivity.isBlank()) ? appActivity : defaultAppActivity;
+
+              UiAutomator2Options options = new UiAutomator2Options()
+                      .setPlatformName("Android")
+                      .setAppPackage(pkg)
+                      .setAppActivity(activity)
+                      .setAutoGrantPermissions(true)
+                      .setNoReset(true)
+                      .amend("shouldWaitForQuiescence", false)
+                      .setNewCommandTimeout(Duration.ofSeconds(300));
+
+              driver = new AndroidDriver(new URL(gridUrl), options);
+          }
+      } catch (MalformedURLException e) {
+          throw new RuntimeException("Grid sunucu adresi hatalı: " + gridUrl, e);
+      }
+
+      drivers.put(runId, driver);
+      return driver;
+  }
+    private AppiumDriver driverFor(String runId) {
+        AppiumDriver driver = drivers.get(runId);
+        if (driver == null) {
+            throw new IllegalStateException("Bu run için aktif bir Appium session'ı yok: " + runId);
+        }
         return driver;
     }
 
-    public void resetToFreshState(String platform, String appIdentifier) {
+    public void resetToFreshState(String runId, String platform, String appIdentifier) {
+        AppiumDriver driver = driverFor(runId);
         if ("ios".equalsIgnoreCase(platform)) {
             ((InteractsWithApps) driver).terminateApp(appIdentifier);
             ((InteractsWithApps) driver).activateApp(appIdentifier);
@@ -99,12 +163,12 @@ public class AppiumDriverManager {
         }
     }
 
-    public String takeScreenshotBase64() {
-        return driver.getScreenshotAs(OutputType.BASE64);
+    public String takeScreenshotBase64(String runId) {
+        return driverFor(runId).getScreenshotAs(OutputType.BASE64);
     }
 
-    public String getPageSource() {
-        return driver.getPageSource();
+    public String getPageSource(String runId) {
+        return driverFor(runId).getPageSource();
     }
 
     public String filterPageSource(String rawPageSource) {
@@ -161,7 +225,6 @@ public class AppiumDriverManager {
         return result.toString();
     }
 
-
     private String extractAttr(String tag, String attrName) {
         Pattern p = Pattern.compile(attrName + "=\"([^\"]*)\"");
         Matcher m = p.matcher(tag);
@@ -170,23 +233,24 @@ public class AppiumDriverManager {
         }
         return null;
     }
-        private String buildBoundsFromXYWH(String tag) {
-            String xStr = extractAttr(tag, "x");
-            String yStr = extractAttr(tag, "y");
-            String wStr = extractAttr(tag, "width");
-            String hStr = extractAttr(tag, "height");
-            if (xStr == null || yStr == null || wStr == null || hStr == null) return null;
-            try {
-                int x = (int) Double.parseDouble(xStr);
-                int y = (int) Double.parseDouble(yStr);
-                int w = (int) Double.parseDouble(wStr);
-                int h = (int) Double.parseDouble(hStr);
-                if (w <= 0 || h <= 0) return null;
-                return "[" + x + "," + y + "][" + (x + w) + "," + (y + h) + "]";
-            } catch (NumberFormatException e) {
-                return null;
-            }
+
+    private String buildBoundsFromXYWH(String tag) {
+        String xStr = extractAttr(tag, "x");
+        String yStr = extractAttr(tag, "y");
+        String wStr = extractAttr(tag, "width");
+        String hStr = extractAttr(tag, "height");
+        if (xStr == null || yStr == null || wStr == null || hStr == null) return null;
+        try {
+            int x = (int) Double.parseDouble(xStr);
+            int y = (int) Double.parseDouble(yStr);
+            int w = (int) Double.parseDouble(wStr);
+            int h = (int) Double.parseDouble(hStr);
+            if (w <= 0 || h <= 0) return null;
+            return "[" + x + "," + y + "][" + (x + w) + "," + (y + h) + "]";
+        } catch (NumberFormatException e) {
+            return null;
         }
+    }
 
     public boolean isValidCoordinate(String rawPageSource, int x, int y) {
         if (rawPageSource == null) return false;
@@ -214,7 +278,8 @@ public class AppiumDriverManager {
         return false;
     }
 
-    public void tap(int x, int y) {
+    public void tap(String runId, int x, int y) {
+        AppiumDriver driver = driverFor(runId);
         PointerInput finger = new PointerInput(PointerInput.Kind.TOUCH, "finger");
         Sequence tap = new Sequence(finger, 1);
         tap.addAction(finger.createPointerMove(Duration.ZERO, PointerInput.Origin.viewport(), x, y));
@@ -224,7 +289,8 @@ public class AppiumDriverManager {
         driver.perform(List.of(tap));
     }
 
-    public void swipe(String direction) {
+    public void swipe(String runId, String direction) {
+        AppiumDriver driver = driverFor(runId);
         Dimension size = driver.manage().window().getSize();
         int width = size.getWidth();
         int height = size.getHeight();
@@ -273,8 +339,9 @@ public class AppiumDriverManager {
         driver.perform(List.of(swipe));
     }
 
-    public void typeText(int x, int y, String text) {
-        tap(x, y);
+    public void typeText(String runId, int x, int y, String text) {
+        AppiumDriver driver = driverFor(runId);
+        tap(runId, x, y);
         try {
             Thread.sleep(600);
         } catch (InterruptedException ignored) {}
@@ -299,20 +366,20 @@ public class AppiumDriverManager {
         }
     }
 
-    public void invalidateSession() {
-        driver = null;
+    public void invalidateSession(String runId) {
+        drivers.remove(runId);
     }
 
-    public void stopSession() {
+    public void stopSession(String runId) {
+        AppiumDriver driver = drivers.remove(runId);
         if (driver != null) {
             driver.quit();
-            driver = null;
         }
     }
 
-    public void startScreenRecording() {
+    public void startScreenRecording(String runId) {
         try {
-            ((CanRecordScreen) driver).startRecordingScreen();
+            ((CanRecordScreen) driverFor(runId)).startRecordingScreen();
         } catch (Exception e) {
             System.out.println("Ekran kaydı başlatılamadı: " + e.getMessage());
         }
@@ -320,7 +387,7 @@ public class AppiumDriverManager {
 
     public boolean stopScreenRecordingAndSave(String runId) {
         try {
-            String base64Video = ((CanRecordScreen) driver).stopRecordingScreen();
+            String base64Video = ((CanRecordScreen) driverFor(runId)).stopRecordingScreen();
             if (base64Video == null || base64Video.isBlank()) return false;
             byte[] videoBytes = Base64.getDecoder().decode(base64Video);
             Path dir = Paths.get("videos");
@@ -342,5 +409,4 @@ public class AppiumDriverManager {
             return null;
         }
     }
-
 }

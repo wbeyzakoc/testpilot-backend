@@ -13,6 +13,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Component
 public class RunStore {
@@ -20,6 +22,9 @@ public class RunStore {
     private final Map<String, Run> runs = new ConcurrentHashMap<>();
     private final ObjectMapper mapper = new ObjectMapper();
     private final File storageFile = new File("runs-history.json");
+    // Diske yazma işlemi tek thread'de sıraya alınır; paralel test thread'leri
+    // birbirini bu I/O için beklemez, sadece put() (non-blocking) yapıp devam eder.
+    private final ExecutorService persistExecutor = Executors.newSingleThreadExecutor();
 
     @PostConstruct
     public void load() {
@@ -35,17 +40,17 @@ public class RunStore {
         }
     }
 
-    public synchronized void save(Run run) {
+    public void save(Run run) {
         runs.put(run.getId(), run);
-        persist();
+        schedulePersist();
     }
 
     public Run get(String id) {
         return runs.get(id);
     }
-    public synchronized void delete(String id) {
+    public void delete(String id) {
         runs.remove(id);
-        persist();
+        schedulePersist();
     }
     public List<Run> getAll() {
         List<Run> all = new ArrayList<>(runs.values());
@@ -53,7 +58,11 @@ public class RunStore {
         return all;
     }
 
-    private void persist() {
+    private void schedulePersist() {
+        persistExecutor.submit(this::persist);
+    }
+
+    private synchronized void persist() {
         try {
             mapper.writeValue(storageFile, runs);
         } catch (IOException e) {
