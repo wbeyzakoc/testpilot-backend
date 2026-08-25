@@ -6,7 +6,11 @@ import com.testpilot.agent.LlmAgent;
 import com.testpilot.agent.RunStore;
 import com.testpilot.appium.AppiumDriverManager;
 import com.testpilot.model.*;
+import com.testpilot.repository.AppUserRepository;
+import com.testpilot.repository.ProjectRepository;
+import com.testpilot.settings.AppSettingsService;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -20,7 +24,8 @@ import java.util.UUID;
 @CrossOrigin(origins = "*")
 public class RunController {
 
-    private static final int MAX_STEPS = 15;
+    // Maksimum adım sayısı artık sabit değil, panelden (AppSettings) okunuyor —
+    // bkz. executeRun içindeki maxSteps değişkeni.
     private static final List<String> INFO_LINK_KEYWORDS = List.of(
             "learn more", "daha fazla bilgi", "hakkında", "detaylar", "more info", "öğren", "about"
     );
@@ -43,12 +48,20 @@ public class RunController {
     private final AppiumDriverManager appiumDriverManager;
     private final LlmAgent llmAgent;
     private final RunStore runStore;
+    private final ProjectRepository projectRepository;
+    private final AppUserRepository userRepository;
+    private final AppSettingsService appSettingsService;
     private final Map<String, String> liveScreenshots = new ConcurrentHashMap<>();
 
-    public RunController(AppiumDriverManager appiumDriverManager, LlmAgent llmAgent, RunStore runStore) {
+    public RunController(AppiumDriverManager appiumDriverManager, LlmAgent llmAgent, RunStore runStore,
+                          ProjectRepository projectRepository, AppUserRepository userRepository,
+                          AppSettingsService appSettingsService) {
         this.appiumDriverManager = appiumDriverManager;
         this.llmAgent = llmAgent;
         this.runStore = runStore;
+        this.projectRepository = projectRepository;
+        this.userRepository = userRepository;
+        this.appSettingsService = appSettingsService;
     }
 
     @DeleteMapping("/{id}")
@@ -56,12 +69,26 @@ public class RunController {
         runStore.delete(id);
     }
 
+    // @Transactional şart: request'te projectId varsa launchRun içinde
+    // project.getMembers() (lazy @ManyToMany) okunuyor; open-in-view=false
+    // olduğu için transaction olmadan "LazyInitializationException: no
+    // Session" atıyordu (ProjectController.listProjects'te de aynı hatayı
+    // aldık, aynı sebep).
     @PostMapping
-    public Run createRun(@RequestBody TestRequest request) {
-        return launchRun(request);
+    @Transactional(readOnly = true)
+    public Run createRun(@RequestHeader(value = "X-Username", required = false) String requester,
+                          @RequestBody TestRequest request) {
+        return launchRun(request, requester);
     }
 
+    // Nightly suite scheduler (kullanıcı oturumu yok) eski imzayla çağırıyor —
+    // bu durumda createdBy/proje bilgisi boş kalır, test yine de çalışır.
+    @Transactional(readOnly = true)
     public Run launchRun(TestRequest request) {
+        return launchRun(request, null);
+    }
+
+    public Run launchRun(TestRequest request, String requester) {
         Run run = new Run();
         run.setId(UUID.randomUUID().toString());
         run.setName(resolveName(request.getName(), request.getGoal()));
@@ -74,6 +101,22 @@ public class RunController {
         run.setRecordVideo(request.isRecordVideo());
         run.setStatus("running");
         run.setStartedAt(Instant.now().toString());
+        run.setCreatedBy(requester);
+
+        if (request.getProjectId() != null) {
+            Project project = projectRepository.findById(request.getProjectId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Proje bulunamadı"));
+            AppUser user = requester != null ? userRepository.findByUsernameIgnoreCase(requester).orElse(null) : null;
+            boolean isAdmin = user != null && user.getRole() == UserRole.ADMIN;
+            boolean isMember = user != null && project.getMembers().stream()
+                    .anyMatch(m -> m.getId().equals(user.getId()));
+            if (!isAdmin && !isMember) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Bu projede test oluşturma yetkiniz yok");
+            }
+            run.setProjectId(project.getId());
+            run.setProjectName(project.getName());
+        }
+
         runStore.save(run);
 
         new Thread(() -> executeRun(run, request.getVariables(), request.getPlatform(), request.getAppPackage(), request.getAppActivity(), request.isCaptureScreenshot(), request.isRecordVideo(), request.isParallel())).start();
@@ -153,6 +196,8 @@ public class RunController {
 
     private void executeRun(Run run, Map<String, String> variables, String platform, String appPackage, String appActivity, boolean captureScreenshot, boolean recordVideo, boolean parallel) {        int consecutiveFails = 0;
         String screenshot = null;
+        Integer configuredMaxSteps = appSettingsService.getOrCreate().getMaxSteps();
+        int maxSteps = (configuredMaxSteps != null && configuredMaxSteps > 0) ? configuredMaxSteps : 15;
         try {
             try {
                 appiumDriverManager.startSession(run.getId(), platform, appPackage, appActivity, parallel);
@@ -168,7 +213,7 @@ public class RunController {
             }
             String lastActionSignature = null;
             int repeatCount = 0;
-            for (int i = 1; i <= MAX_STEPS; i++) {
+            for (int i = 1; i <= maxSteps; i++) {
                 if (run.isStopRequested()) {
                     run.setStatus("stopped");
                     run.setFinishedAt(Instant.now().toString());
@@ -286,7 +331,7 @@ public class RunController {
             }
             run.setStatus("failed");
             String lastTarget = run.getSteps().isEmpty() ? "bilinmiyor" : run.getSteps().get(run.getSteps().size() - 1).getTarget();
-            run.setError("Maksimum adım sayısına (" + MAX_STEPS + ") ulaşıldı, hedef tamamlanamadan test sonlandırıldı. Son denenen: " + lastTarget);
+            run.setError("Maksimum adım sayısına (" + maxSteps + ") ulaşıldı, hedef tamamlanamadan test sonlandırıldı. Son denenen: " + lastTarget);
             run.setFinishedAt(Instant.now().toString());
             if (captureScreenshot) run.setFailureScreenshot(screenshot);
             runStore.save(run);

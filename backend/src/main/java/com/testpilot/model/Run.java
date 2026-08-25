@@ -75,4 +75,17 @@ public class Run {//bir testin tüm durumu
     public void setFailureScreenshot(String failureScreenshot) { this.failureScreenshot = failureScreenshot; }
     public boolean isHasVideo() { return hasVideo; }
     public void setHasVideo(boolean hasVideo) { this.hasVideo = hasVideo; }
+
+    // Proje seçilmeden oluşturulan testlerde (ya da nightly suite'te) bu alanlar
+    // null kalır — sadece createdBy ve startedAt/finishedAt dolu olur.
+    private Long projectId;
+    private String projectName;
+    private String createdBy;
+
+    public Long getProjectId() { return projectId; }
+    public void setProjectId(Long projectId) { this.projectId = projectId; }
+    public String getProjectName() { return projectName; }
+    public void setProjectName(String projectName) { this.projectName = projectName; }
+    public String getCreatedBy() { return createdBy; }
+    public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
 }

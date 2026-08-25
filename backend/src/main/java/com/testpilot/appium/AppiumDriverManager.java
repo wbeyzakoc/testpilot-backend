@@ -15,8 +15,9 @@ import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.OutputType;
 import org.openqa.selenium.interactions.PointerInput;
 import org.openqa.selenium.interactions.Sequence;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import com.testpilot.model.AppSettings;
+import com.testpilot.settings.AppSettingsService;
 
 import java.net.MalformedURLException;
 import java.net.URI;
@@ -36,26 +37,21 @@ import java.util.regex.Pattern;
 @Component
 public class AppiumDriverManager {
 
-    @Value("${appium.server-url}")
-    private String appiumServerUrl;
+    // appiumServerUrl/iosServerUrl/iosDeviceName/iosPlatformVersion alanları tamamen
+    // kaldırıldı — aktif startSession() içinde hiç kullanılmıyorlardı (aşağıdaki yorum
+    // satırına alınmış eski versiyonda kullanılıyordu), bu yüzden panele de eklenmediler.
+    // application.properties'teki appium.server-url / appium.ios-server-url /
+    // ios.simulator-device-name / ios.platform-version satırlarını da silebilir ya da
+    // yorum satırı olarak bırakabilirsin — artık hiçbir Java alanı bunları okumuyor.
 
-    @Value("${appium.ios-server-url:${appium.server-url}}")
-    private String iosServerUrl;
+    // gridUrl / defaultAppPackage / defaultAppActivity artık application.properties'ten
+    // @Value ile DEĞİL, AppSettingsService üzerinden veritabanından (panelden
+    // yönetilen) okunuyor — bkz. startSession() içindeki fetch.
+    private final AppSettingsService appSettingsService;
 
-    @Value("${appium.grid-url:${appium.server-url}}")
-    private String gridUrl;
-
-    @Value("${android.app-package:}")
-    private String defaultAppPackage;
-
-    @Value("${android.app-activity:}")
-    private String defaultAppActivity;
-
-    @Value("${ios.simulator-device-name:iPhone 15}")
-    private String iosDeviceName;
-
-    @Value("${ios.platform-version:17.5}")
-    private String iosPlatformVersion;
+    public AppiumDriverManager(AppSettingsService appSettingsService) {
+        this.appSettingsService = appSettingsService;
+    }
 
     // Her run kendi Appium session'ını (driver'ını) tutar - paralel koşum için
     private final Map<String, AppiumDriver> drivers = new ConcurrentHashMap<>();
@@ -110,6 +106,12 @@ public class AppiumDriverManager {
       if (existing != null) {
           return existing;
       }
+
+      // gridUrl/defaultAppPackage/defaultAppActivity artık panelden (DB'den) okunuyor.
+      AppSettings settings = appSettingsService.getOrCreate();
+      String gridUrl = settings.getAppiumGridUrl();
+      String defaultAppPackage = settings.getAndroidAppPackage();
+      String defaultAppActivity = settings.getAndroidAppActivity();
 
       AppiumDriver driver;
       try {

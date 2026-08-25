@@ -11,6 +11,11 @@ public class TestRequest {
     private boolean captureScreenshot;
     private boolean recordVideo;
     private boolean parallel;
+    // Opsiyonel — seçilmezse null kalır, Run'da da projectId/projectName null olur.
+    private Long projectId;
+
+    public Long getProjectId() { return projectId; }
+    public void setProjectId(Long projectId) { this.projectId = projectId; }
 
     public String getPlatform() { return platform; }
     public void setPlatform(String platform) { this.platform = platform; }

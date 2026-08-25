@@ -5,3 +5,4 @@ target/
 runs-history.json
 videos/
 .DS_Store
+secrets.properties

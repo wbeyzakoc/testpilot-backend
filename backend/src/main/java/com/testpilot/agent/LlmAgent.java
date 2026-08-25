@@ -5,12 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.testpilot.model.AgentAction;
 import com.testpilot.model.RunStep;
 import com.testpilot.model.ScenarioSuggestion;
+import com.testpilot.settings.AppSettingsService;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -21,11 +21,13 @@ import java.util.concurrent.TimeUnit;
 @Component
 public class LlmAgent {
 
-    @Value("${openrouter.api-key}")
-    private String apiKey;
+    // api-key ve model artık application.properties'ten @Value ile DEĞİL,
+    // AppSettingsService üzerinden veritabanından (panelden yönetilen) okunuyor.
+    private final AppSettingsService appSettingsService;
 
-    @Value("${openrouter.model}")
-    private String model;
+    public LlmAgent(AppSettingsService appSettingsService) {
+        this.appSettingsService = appSettingsService;
+    }
 
     private static final String OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -142,7 +144,7 @@ public class LlmAgent {
             messages.add(userMsg);
 
             var body = mapper.createObjectNode();
-            body.put("model", model);
+            body.put("model", appSettingsService.getOrCreate().getOpenrouterModel());
             body.set("messages", messages);
             body.put("max_tokens", 1024);
 
@@ -153,7 +155,7 @@ public class LlmAgent {
 
             Request request = new Request.Builder()
                     .url(OPENROUTER_URL)
-                    .addHeader("Authorization", "Bearer " + apiKey)
+                    .addHeader("Authorization", "Bearer " + appSettingsService.getOpenrouterApiKeyDecrypted())
                     .addHeader("Content-Type", "application/json")
                     .post(requestBody)
                     .build();
@@ -219,7 +221,7 @@ public class LlmAgent {
             messages.add(userMsg);
 
             var body = mapper.createObjectNode();
-            body.put("model", model);
+            body.put("model", appSettingsService.getOrCreate().getOpenrouterModel());
             body.set("messages", messages);
             body.put("max_tokens", maxTokens);
 
@@ -230,7 +232,7 @@ public class LlmAgent {
 
             Request request = new Request.Builder()
                     .url(OPENROUTER_URL)
-                    .addHeader("Authorization", "Bearer " + apiKey)
+                    .addHeader("Authorization", "Bearer " + appSettingsService.getOpenrouterApiKeyDecrypted())
                     .addHeader("Content-Type", "application/json")
                     .post(requestBody)
                     .build();
