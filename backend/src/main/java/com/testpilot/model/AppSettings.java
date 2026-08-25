@@ -36,6 +36,15 @@ public class AppSettings {
     @Column(name = "max_steps")
     private Integer maxSteps;
 
+    // Device farm (BrowserStack vb.) kullanirken hangi cihazda calisilacagini
+    // belirtmek icin -- bos birakilirsa (yerel Appium/Grid kullanimi) hicbir
+    // capability gonderilmez, mevcut davranis degismez. Bkz. AppiumDriverManager.
+    @Column(name = "device_name", length = 255)
+    private String deviceName;
+
+    @Column(name = "platform_version", length = 50)
+    private String platformVersion;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public String getOpenrouterApiKeyEncrypted() { return openrouterApiKeyEncrypted; }
@@ -50,4 +59,8 @@ public class AppSettings {
     public void setAndroidAppActivity(String androidAppActivity) { this.androidAppActivity = androidAppActivity; }
     public Integer getMaxSteps() { return maxSteps; }
     public void setMaxSteps(Integer maxSteps) { this.maxSteps = maxSteps; }
+    public String getDeviceName() { return deviceName; }
+    public void setDeviceName(String deviceName) { this.deviceName = deviceName; }
+    public String getPlatformVersion() { return platformVersion; }
+    public void setPlatformVersion(String platformVersion) { this.platformVersion = platformVersion; }
 }

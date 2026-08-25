@@ -8,6 +8,8 @@ public class UpdateAppSettingsRequest {
     private String androidAppPackage;
     private String androidAppActivity;
     private Integer maxSteps;
+    private String deviceName;
+    private String platformVersion;
 
     public String getOpenrouterApiKey() { return openrouterApiKey; }
     public void setOpenrouterApiKey(String openrouterApiKey) { this.openrouterApiKey = openrouterApiKey; }
@@ -21,4 +23,8 @@ public class UpdateAppSettingsRequest {
     public void setAndroidAppActivity(String androidAppActivity) { this.androidAppActivity = androidAppActivity; }
     public Integer getMaxSteps() { return maxSteps; }
     public void setMaxSteps(Integer maxSteps) { this.maxSteps = maxSteps; }
+    public String getDeviceName() { return deviceName; }
+    public void setDeviceName(String deviceName) { this.deviceName = deviceName; }
+    public String getPlatformVersion() { return platformVersion; }
+    public void setPlatformVersion(String platformVersion) { this.platformVersion = platformVersion; }
 }

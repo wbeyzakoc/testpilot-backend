@@ -112,6 +112,11 @@ public class AppiumDriverManager {
       String gridUrl = settings.getAppiumGridUrl();
       String defaultAppPackage = settings.getAndroidAppPackage();
       String defaultAppActivity = settings.getAndroidAppActivity();
+      // deviceName/platformVersion: sadece device farm (BrowserStack vb.) kullanirken
+      // doldurulur -- bu ikisi bossa hicbir capability eklenmez, yerel Appium/Grid
+      // davranisi hic degismez.
+      String deviceName = settings.getDeviceName();
+      String platformVersion = settings.getPlatformVersion();
 
       AppiumDriver driver;
       try {
@@ -122,6 +127,8 @@ public class AppiumDriverManager {
                       .setBundleId(appIdentifier)
                       .setAutoAcceptAlerts(true)
                       .setNewCommandTimeout(Duration.ofSeconds(300));
+              if (deviceName != null && !deviceName.isBlank()) options.setDeviceName(deviceName);
+              if (platformVersion != null && !platformVersion.isBlank()) options.setPlatformVersion(platformVersion);
 
               driver = new IOSDriver(new URL(gridUrl), options);
           } else {
@@ -136,6 +143,8 @@ public class AppiumDriverManager {
                       .setNoReset(true)
                       .amend("shouldWaitForQuiescence", false)
                       .setNewCommandTimeout(Duration.ofSeconds(300));
+              if (deviceName != null && !deviceName.isBlank()) options.setDeviceName(deviceName);
+              if (platformVersion != null && !platformVersion.isBlank()) options.setPlatformVersion(platformVersion);
 
               driver = new AndroidDriver(new URL(gridUrl), options);
           }

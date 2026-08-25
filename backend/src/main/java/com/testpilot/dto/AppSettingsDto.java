@@ -11,6 +11,10 @@ public class AppSettingsDto {
     private String androidAppPackage;
     private String androidAppActivity;
     private Integer maxSteps;
+    // Device farm (BrowserStack vb.) icin cihaz secimi -- bos ise yerel
+    // Appium/Grid kullanimi degismeden calismaya devam eder.
+    private String deviceName;
+    private String platformVersion;
 
     public static AppSettingsDto from(AppSettings s) {
         AppSettingsDto dto = new AppSettingsDto();
@@ -20,6 +24,8 @@ public class AppSettingsDto {
         dto.androidAppPackage = s.getAndroidAppPackage();
         dto.androidAppActivity = s.getAndroidAppActivity();
         dto.maxSteps = s.getMaxSteps();
+        dto.deviceName = s.getDeviceName();
+        dto.platformVersion = s.getPlatformVersion();
         return dto;
     }
 
@@ -35,4 +41,8 @@ public class AppSettingsDto {
     public void setAndroidAppActivity(String androidAppActivity) { this.androidAppActivity = androidAppActivity; }
     public Integer getMaxSteps() { return maxSteps; }
     public void setMaxSteps(Integer maxSteps) { this.maxSteps = maxSteps; }
+    public String getDeviceName() { return deviceName; }
+    public void setDeviceName(String deviceName) { this.deviceName = deviceName; }
+    public String getPlatformVersion() { return platformVersion; }
+    public void setPlatformVersion(String platformVersion) { this.platformVersion = platformVersion; }
 }

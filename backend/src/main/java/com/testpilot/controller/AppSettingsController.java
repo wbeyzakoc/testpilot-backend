@@ -44,6 +44,8 @@ public class AppSettingsController {
         settings.setAppiumGridUrl(request.getAppiumGridUrl());
         settings.setAndroidAppPackage(request.getAndroidAppPackage());
         settings.setAndroidAppActivity(request.getAndroidAppActivity());
+        settings.setDeviceName(request.getDeviceName());
+        settings.setPlatformVersion(request.getPlatformVersion());
         if (request.getMaxSteps() != null && request.getMaxSteps() > 0) {
             settings.setMaxSteps(request.getMaxSteps());
         }
