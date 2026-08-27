@@ -1,0 +1,13 @@
+services:
+  oracle:
+    image: gvenzl/oracle-free:latest
+    container_name: testpilot-oracle
+    ports:
+      - "1521:1521"
+    environment:
+      ORACLE_PASSWORD: oracle123
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+
+volumes:
+  oracle-data:
