@@ -5,7 +5,7 @@ services:
     ports:
       - "1521:1521"
     environment:
-      ORACLE_PASSWORD: oracle123
+      ORACLE_PASSWORD: Bk.25122512
     volumes:
       - oracle-data:/opt/oracle/oradata
 
