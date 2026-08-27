@@ -41,6 +41,16 @@ public class Run {//bir testin tüm durumu
     public boolean isNightlySuite() { return nightlySuite; }
     public void setNightlySuite(boolean nightlySuite) { this.nightlySuite = nightlySuite; }
 
+    // nightlySuite'ten FARKLI bir alan: nightlySuite "bu run bir şablon, gece
+    // tekrar koşulacak" demek (kullanıcı /runs/{id}/nightly ile işaretliyor);
+    // nightlyRun ise "bu run'IN KENDİSİ gece koşumu tarafından üretildi" demek
+    // -- NightlySuiteScheduler tarafından set edilir, Dashboard'daki "Gece
+    // Koşumu" bölümü sabah bunlara bakarak sonuçları gösterir.
+    private boolean nightlyRun;
+
+    public boolean isNightlyRun() { return nightlyRun; }
+    public void setNightlyRun(boolean nightlyRun) { this.nightlyRun = nightlyRun; }
+
     public String getAppActivity() {
         return appActivity;
     }

@@ -24,6 +24,14 @@ public class AppSettings {
     @Column(name = "openrouter_model", length = 255)
     private String openrouterModel;
 
+    // Boş bırakılırsa (ya da hiç set edilmemişse) LlmAgent varsayılan olarak
+    // OpenRouter'ı kullanır. Burayı Ollama gibi OpenAI-uyumlu bir endpoint'e
+    // (örn. "http://192.168.1.50:11434/v1/chat/completions") çevirince, model
+    // isteğini artık o adrese gönderir -- kod tarafında başka hiçbir değişiklik
+    // gerekmez, çünkü Ollama aynı "/v1/chat/completions" şeklini destekliyor.
+    @Column(name = "llm_api_url", length = 500)
+    private String llmApiUrl;
+
     @Column(name = "appium_grid_url", length = 255)
     private String appiumGridUrl;
 
@@ -51,6 +59,8 @@ public class AppSettings {
     public void setOpenrouterApiKeyEncrypted(String openrouterApiKeyEncrypted) { this.openrouterApiKeyEncrypted = openrouterApiKeyEncrypted; }
     public String getOpenrouterModel() { return openrouterModel; }
     public void setOpenrouterModel(String openrouterModel) { this.openrouterModel = openrouterModel; }
+    public String getLlmApiUrl() { return llmApiUrl; }
+    public void setLlmApiUrl(String llmApiUrl) { this.llmApiUrl = llmApiUrl; }
     public String getAppiumGridUrl() { return appiumGridUrl; }
     public void setAppiumGridUrl(String appiumGridUrl) { this.appiumGridUrl = appiumGridUrl; }
     public String getAndroidAppPackage() { return androidAppPackage; }

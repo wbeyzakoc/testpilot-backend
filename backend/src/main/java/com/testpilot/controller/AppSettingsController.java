@@ -41,6 +41,7 @@ public class AppSettingsController {
         currentUserResolver.requireAdmin(requester);
         AppSettings settings = appSettingsService.getOrCreate();
         settings.setOpenrouterModel(request.getOpenrouterModel());
+        settings.setLlmApiUrl(request.getLlmApiUrl());
         settings.setAppiumGridUrl(request.getAppiumGridUrl());
         settings.setAndroidAppPackage(request.getAndroidAppPackage());
         settings.setAndroidAppActivity(request.getAndroidAppActivity());

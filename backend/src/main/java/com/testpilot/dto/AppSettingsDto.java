@@ -7,6 +7,7 @@ import com.testpilot.model.AppSettings;
 public class AppSettingsDto {
     private boolean openrouterApiKeySet;
     private String openrouterModel;
+    private String llmApiUrl;
     private String appiumGridUrl;
     private String androidAppPackage;
     private String androidAppActivity;
@@ -20,6 +21,7 @@ public class AppSettingsDto {
         AppSettingsDto dto = new AppSettingsDto();
         dto.openrouterApiKeySet = s.getOpenrouterApiKeyEncrypted() != null && !s.getOpenrouterApiKeyEncrypted().isBlank();
         dto.openrouterModel = s.getOpenrouterModel();
+        dto.llmApiUrl = s.getLlmApiUrl();
         dto.appiumGridUrl = s.getAppiumGridUrl();
         dto.androidAppPackage = s.getAndroidAppPackage();
         dto.androidAppActivity = s.getAndroidAppActivity();
@@ -33,6 +35,8 @@ public class AppSettingsDto {
     public void setOpenrouterApiKeySet(boolean openrouterApiKeySet) { this.openrouterApiKeySet = openrouterApiKeySet; }
     public String getOpenrouterModel() { return openrouterModel; }
     public void setOpenrouterModel(String openrouterModel) { this.openrouterModel = openrouterModel; }
+    public String getLlmApiUrl() { return llmApiUrl; }
+    public void setLlmApiUrl(String llmApiUrl) { this.llmApiUrl = llmApiUrl; }
     public String getAppiumGridUrl() { return appiumGridUrl; }
     public void setAppiumGridUrl(String appiumGridUrl) { this.appiumGridUrl = appiumGridUrl; }
     public String getAndroidAppPackage() { return androidAppPackage; }

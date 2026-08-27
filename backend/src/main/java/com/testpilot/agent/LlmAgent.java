@@ -29,7 +29,18 @@ public class LlmAgent {
         this.appSettingsService = appSettingsService;
     }
 
-    private static final String OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+    // Panelde "LLM API URL" alanı boş bırakılırsa (ya da hiç ayarlanmamışsa) bu
+    // varsayılan kullanılır -- yani mevcut kurulumlar hiçbir şey yapmadan eskisi
+    // gibi OpenRouter'a devam eder. Doldurulursa (örn. Ollama'nın OpenAI-uyumlu
+    // "http://<ip>:11434/v1/chat/completions" adresi) istekler oraya gider --
+    // istek/yanıt şekli aynı olduğu için ("/choices/0/message/content") başka
+    // hiçbir kod değişikliği gerekmiyor.
+    private static final String DEFAULT_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+    private String resolveApiUrl() {
+        String configured = appSettingsService.getOrCreate().getLlmApiUrl();
+        return (configured != null && !configured.isBlank()) ? configured.trim() : DEFAULT_OPENROUTER_URL;
+    }
 
     private final OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -154,7 +165,7 @@ public class LlmAgent {
             );
 
             Request request = new Request.Builder()
-                    .url(OPENROUTER_URL)
+                    .url(resolveApiUrl())
                     .addHeader("Authorization", "Bearer " + appSettingsService.getOpenrouterApiKeyDecrypted())
                     .addHeader("Content-Type", "application/json")
                     .post(requestBody)
@@ -231,7 +242,7 @@ public class LlmAgent {
             );
 
             Request request = new Request.Builder()
-                    .url(OPENROUTER_URL)
+                    .url(resolveApiUrl())
                     .addHeader("Authorization", "Bearer " + appSettingsService.getOpenrouterApiKeyDecrypted())
                     .addHeader("Content-Type", "application/json")
                     .post(requestBody)

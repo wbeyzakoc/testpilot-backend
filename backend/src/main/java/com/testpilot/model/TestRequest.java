@@ -13,6 +13,14 @@ public class TestRequest {
     private boolean parallel;
     // Opsiyonel — seçilmezse null kalır, Run'da da projectId/projectName null olur.
     private Long projectId;
+    // Sadece NightlySuiteScheduler set eder -- normal Create Test akışında hiç
+    // dokunulmaz (varsayılan false). Amaç: gece koşumunun ÜRETTİĞİ Run'ı,
+    // "bu run gece koşumundan geldi" diye işaretleyip Dashboard'daki özel
+    // gece koşumu bölümünde gösterebilmek (bkz. Run.nightlyRun).
+    private boolean nightlyRun;
+
+    public boolean isNightlyRun() { return nightlyRun; }
+    public void setNightlyRun(boolean nightlyRun) { this.nightlyRun = nightlyRun; }
 
     public Long getProjectId() { return projectId; }
     public void setProjectId(Long projectId) { this.projectId = projectId; }

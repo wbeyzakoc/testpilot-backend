@@ -17,7 +17,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/runs")
@@ -102,6 +104,7 @@ public class RunController {
         run.setStatus("running");
         run.setStartedAt(Instant.now().toString());
         run.setCreatedBy(requester);
+        run.setNightlyRun(request.isNightlyRun());
 
         if (request.getProjectId() != null) {
             Project project = projectRepository.findById(request.getProjectId())
@@ -150,9 +153,36 @@ public class RunController {
         return combined;
     }
 
+    // projectId verilirse (Projeler sayfasında bir projeye tıklayınca) sadece o
+    // projeye ait koşumları filtreliyor -- getAll() zaten aktif+geçmiş birleşik
+    // listeyi döndürüyor, burada sadece süzüyoruz.
+    //
+    // Görünürlük: USER rolündeki bir kullanıcı sadece (a) kendi oluşturduğu
+    // testleri ve (b) üyesi olduğu projelerin testlerini görür -- adminler
+    // hepsini görür. Önceden burada hiç filtre yoktu, bu yüzden bir kullanıcı
+    // üyesi olmadığı bir projenin testlerini de History'de görebiliyordu.
     @GetMapping
-    public List<Run> listRuns() {
-        return runStore.getAll();
+    public List<Run> listRuns(@RequestHeader(value = "X-Username", required = false) String requester,
+                               @RequestParam(required = false) Long projectId) {
+        List<Run> visible = filterVisible(runStore.getAll(), requester);
+        if (projectId == null) return visible;
+        return visible.stream().filter(r -> projectId.equals(r.getProjectId())).toList();
+    }
+
+    private List<Run> filterVisible(List<Run> all, String requester) {
+        if (requester == null || requester.isBlank()) return List.of();
+        AppUser user = userRepository.findByUsernameIgnoreCase(requester).orElse(null);
+        if (user == null) return List.of();
+        if (user.getRole() == UserRole.ADMIN) return all;
+
+        Set<Long> memberProjectIds = projectRepository.findByMembersContaining(user).stream()
+                .map(Project::getId)
+                .collect(Collectors.toSet());
+
+        return all.stream()
+                .filter(r -> requester.equalsIgnoreCase(r.getCreatedBy())
+                        || (r.getProjectId() != null && memberProjectIds.contains(r.getProjectId())))
+                .toList();
     }
 
     @GetMapping("/{id}")

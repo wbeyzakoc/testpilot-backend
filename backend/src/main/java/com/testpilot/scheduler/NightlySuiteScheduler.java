@@ -84,6 +84,8 @@ public class NightlySuiteScheduler {
             request.setCaptureScreenshot(template.isCaptureScreenshot());
             request.setRecordVideo(template.isRecordVideo());
             request.setParallel(true);
+            // Dashboard'daki "Gece Koşumu" bölümü bu run'ı sabah bununla tanıyor.
+            request.setNightlyRun(true);
 
             runController.launchRun(request);
 

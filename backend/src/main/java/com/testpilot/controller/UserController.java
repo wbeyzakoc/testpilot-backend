@@ -1,9 +1,11 @@
 package com.testpilot.controller;
 
+import com.testpilot.agent.RunStore;
 import com.testpilot.dto.AppUserDto;
 import com.testpilot.dto.CreateUserRequest;
 import com.testpilot.dto.UpdateRoleRequest;
 import com.testpilot.model.AppUser;
+import com.testpilot.model.Run;
 import com.testpilot.model.UserRole;
 import com.testpilot.model.UserSource;
 import com.testpilot.repository.AppUserRepository;
@@ -13,8 +15,10 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.List;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/users")
@@ -24,21 +28,45 @@ public class UserController {
     private final AppUserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final CurrentUserResolver currentUserResolver;
+    private final RunStore runStore;
 
     public UserController(AppUserRepository userRepository, PasswordEncoder passwordEncoder,
-                           CurrentUserResolver currentUserResolver) {
+                           CurrentUserResolver currentUserResolver, RunStore runStore) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.currentUserResolver = currentUserResolver;
+        this.runStore = runStore;
     }
 
-    // Bu panel sadece admin rolündeki kullanıcılara açık.
+    // Bu panel sadece admin rolündeki kullanıcılara açık. Her kullanıcının kaç
+    // test oluşturduğu/kaçının geçtiği de (Run.createdBy üzerinden) burada
+    // hesaplanıp DTO'ya ekleniyor -- users.tsx'te arama/başarı oranı için.
     @GetMapping
     public List<AppUserDto> listUsers(@RequestHeader(value = "X-Username", required = false) String requester) {
         currentUserResolver.requireAdmin(requester);
+
+        Map<String, int[]> statsByUsername = new HashMap<>(); // [toplam, gecen]
+        for (Run r : runStore.getAll()) {
+            String createdBy = r.getCreatedBy();
+            if (createdBy == null || createdBy.isBlank()) continue;
+            String key = createdBy.toLowerCase();
+            int[] counts = statsByUsername.computeIfAbsent(key, k -> new int[2]);
+            counts[0]++;
+            if ("passed".equals(r.getStatus())) counts[1]++;
+        }
+
         return userRepository.findAll().stream()
                 .sorted(Comparator.comparing(AppUser::getUsername, String.CASE_INSENSITIVE_ORDER))
-                .map(AppUserDto::from)
+                .map(u -> {
+                    AppUserDto dto = AppUserDto.from(u);
+                    int[] counts = statsByUsername.get(u.getUsername().toLowerCase());
+                    if (counts != null) {
+                        dto.setTestCount(counts[0]);
+                        dto.setPassedCount(counts[1]);
+                        dto.setSuccessRate(counts[0] > 0 ? (counts[1] * 100.0 / counts[0]) : null);
+                    }
+                    return dto;
+                })
                 .toList();
     }
 
