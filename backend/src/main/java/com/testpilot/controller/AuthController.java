@@ -8,6 +8,7 @@ import com.testpilot.model.UserRole;
 import com.testpilot.model.UserSource;
 import com.testpilot.repository.AppUserRepository;
 import com.testpilot.repository.LdapSettingsRepository;
+import com.testpilot.security.LdapAuthException;
 import com.testpilot.security.LdapAuthenticator;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -59,19 +60,31 @@ public class AuthController {
         //    (önceden LDAP'tan oluşmuş) durumunda şirket LDAP'ına karşı doğrulanır.
         //    ldap_settings henüz doldurulmadıysa (url boş) LdapAuthenticator zaten
         //    hiçbir bağlantı denemeden false döner.
+        //
+        //    LDAP ayarları doluyken bir şey ters giderse (yanlış manager şifresi,
+        //    sunucuya ulaşılamaması, kullanıcı bulunamaması vb.) LdapAuthenticator
+        //    artık sessizce false değil, LdapAuthException fırlatıyor -- burada
+        //    yakalayıp mesajını 401'in gövdesine koyuyoruz ki login ekranında
+        //    ("Kullanıcı adı veya parola hatalı" yerine) gerçek LDAP hatası görünsün.
+        //    Bunun için application.properties'te server.error.include-message=always
+        //    ayarlı olması gerekiyor (bkz. o dosyadaki not).
         LdapSettings settings = ldapSettingsRepository.findById(LdapSettings.SINGLETON_ID).orElse(null);
-        if (ldapAuthenticator.authenticate(settings, username, request.getPassword())) {
-            AppUser user = existing;
-            if (user == null) {
-                // LDAP ile ilk girişte herkes USER rolüyle başlar (users.tsx'teki
-                // açıklamayla tutarlı) — admin isterse sonra Admin yapabilir.
-                user = new AppUser();
-                user.setUsername(username);
-                user.setRole(UserRole.USER);
-                user.setSource(UserSource.LDAP);
-                userRepository.save(user);
+        try {
+            if (ldapAuthenticator.authenticate(settings, username, request.getPassword())) {
+                AppUser user = existing;
+                if (user == null) {
+                    // LDAP ile ilk girişte herkes USER rolüyle başlar (users.tsx'teki
+                    // açıklamayla tutarlı) — admin isterse sonra Admin yapabilir.
+                    user = new AppUser();
+                    user.setUsername(username);
+                    user.setRole(UserRole.USER);
+                    user.setSource(UserSource.LDAP);
+                    userRepository.save(user);
+                }
+                return new LoginResponse(user.getUsername(), user.getRole());
             }
-            return new LoginResponse(user.getUsername(), user.getRole());
+        } catch (LdapAuthException e) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, e.getMessage());
         }
 
         throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, BAD_CREDENTIALS);
