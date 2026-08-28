@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 import java.time.Instant;
 
 @Entity
-@Table(name = "app_users", uniqueConstraints = @UniqueConstraint(columnNames = "username"))
+@Table(name = "MOBILE_APP_USERS", uniqueConstraints = @UniqueConstraint(columnNames = "username"))
 public class AppUser {
 
     // NOT: GenerationType.IDENTITY yerine SEQUENCE kullanılıyor — Hibernate 6 ile
@@ -15,7 +15,7 @@ public class AppUser {
     // tamamen atlıyor, Oracle'da da geleneksel/en uyumlu yöntem zaten budur.
     @Id
     @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "app_users_seq_gen")
-    @SequenceGenerator(name = "app_users_seq_gen", sequenceName = "app_users_seq", allocationSize = 1)
+    @SequenceGenerator(name = "app_users_seq_gen", sequenceName = "MOBILE_APP_USERS_SEQ", allocationSize = 1)
     private Long id;
 
     @Column(nullable = false, length = 255)

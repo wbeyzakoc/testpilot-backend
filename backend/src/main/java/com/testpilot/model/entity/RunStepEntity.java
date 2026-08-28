@@ -6,12 +6,12 @@ import jakarta.persistence.*;
 // olusturuluyor) degismiyor, bu ayri/ek bir siniftir. run_steps tablosunda
 // RunStep'te olmayan bir "id" kolonu var (JPA icin senkron PK gerekiyor).
 @Entity
-@Table(name = "run_steps")
+@Table(name = "MOBILE_RUN_STEPS")
 public class RunStepEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "run_steps_seq_gen")
-    @SequenceGenerator(name = "run_steps_seq_gen", sequenceName = "run_steps_seq", allocationSize = 1)
+    @SequenceGenerator(name = "run_steps_seq_gen", sequenceName = "MOBILE_RUN_STEPS_SEQ", allocationSize = 1)
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)

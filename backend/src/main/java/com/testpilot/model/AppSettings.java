@@ -10,7 +10,7 @@ import jakarta.persistence.*;
 // NOT: DB_PASSWORD ve ldap.encryption.key/salt burada YOK ve OLAMAZ — uygulama
 // veritabanına bağlanmadan önce onlara ihtiyaç duyuyor (bkz. secrets.properties).
 @Entity
-@Table(name = "app_settings")
+@Table(name = "MOBILE_APP_SETTINGS")
 public class AppSettings {
 
     public static final Long SINGLETON_ID = 1L;

@@ -5,7 +5,7 @@ import jakarta.persistence.*;
 // Tek satırlık ayar tablosu: uygulamanın tamamı için tek bir LDAP yapılandırması var,
 // bu yüzden id her zaman sabit SINGLETON_ID değeriyle tutuluyor.
 @Entity
-@Table(name = "ldap_settings")
+@Table(name = "MOBILE_LDAP_SETTINGS")
 public class LdapSettings {
 
     public static final long SINGLETON_ID = 1L;

@@ -11,12 +11,12 @@ import java.util.Set;
 // rolündeki bir kullanıcı sadece üye olduğu projeleri görüp seçebilir,
 // adminler üyelikten bağımsız hepsini görür.
 @Entity
-@Table(name = "projects", uniqueConstraints = @UniqueConstraint(columnNames = "name"))
+@Table(name = "MOBILE_PROJECTS", uniqueConstraints = @UniqueConstraint(columnNames = "name"))
 public class Project {
 
     @Id
     @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "projects_seq_gen")
-    @SequenceGenerator(name = "projects_seq_gen", sequenceName = "projects_seq", allocationSize = 1)
+    @SequenceGenerator(name = "projects_seq_gen", sequenceName = "MOBILE_PROJECTS_SEQ", allocationSize = 1)
     private Long id;
 
     @Column(nullable = false, length = 255)

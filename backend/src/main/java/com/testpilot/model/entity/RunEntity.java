@@ -15,7 +15,7 @@ import java.util.List;
 // Project'e @ManyToOne kurmuyoruz (lazy-loading/serilestirme sorunlarindan
 // kacinmak icin, mevcut kod da ayni sekilde davraniyor).
 @Entity
-@Table(name = "runs")
+@Table(name = "MOBILE_RUNS")
 public class RunEntity {
 
     @Id

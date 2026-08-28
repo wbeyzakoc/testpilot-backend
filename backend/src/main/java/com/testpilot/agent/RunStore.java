@@ -69,7 +69,7 @@ public class RunStore {
     // olmadan, açılışta en erken anda çalışmalı.
     private void fixNullNightlyRunColumn() {
         try {
-            int updated = jdbcTemplate.update("UPDATE runs SET nightly_run = 0 WHERE nightly_run IS NULL");
+            int updated = jdbcTemplate.update("UPDATE MOBILE_RUNS SET nightly_run = 0 WHERE nightly_run IS NULL");
             if (updated > 0) {
                 System.out.println(updated + " eski test satırında nightly_run NULL'dan false'a düzeltildi.");
             }
