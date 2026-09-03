@@ -99,6 +99,68 @@ CREATE TABLE NIGHTLY_SETTINGS (
 );
 
 -- ----------------------------------------------------------------------------
+-- 6) MOBILE_LDAP_SETTINGS — LDAP yapılandırması (LdapSettings.java)
+--    Tek satırlık tablo: her zaman ID = 1
+-- ----------------------------------------------------------------------------
+CREATE TABLE MOBILE_LDAP_SETTINGS (
+    ID                       NUMBER(10)  DEFAULT 1 NOT NULL,
+    URL                      VARCHAR2(500),
+    BASE_DN                  VARCHAR2(500),
+    MANAGER_DN               VARCHAR2(500),
+    MANAGER_PASSWORD_ENCRYPTED VARCHAR2(1000),
+    USER_DN_PATTERN          VARCHAR2(500),
+    USER_SEARCH_FILTER       VARCHAR2(500),
+    GROUP_SEARCH_BASE        VARCHAR2(500),
+    GROUP_SEARCH_FILTER      VARCHAR2(500),
+    PASSWORD_ENCODER_TYPE    VARCHAR2(50) DEFAULT 'bcrypt',
+    CONSTRAINT PK_MOBILE_LDAP_SETTINGS PRIMARY KEY (ID),
+    CONSTRAINT CK_MOBILE_LDAP_SETTINGS_ID CHECK (ID = 1)
+);
+
+COMMENT ON TABLE MOBILE_LDAP_SETTINGS IS 'LDAP yapılandırma ayarları (tek satır, ID=1)';
+COMMENT ON COLUMN MOBILE_LDAP_SETTINGS.MANAGER_PASSWORD_ENCRYPTED IS 'AES ile şifrelenmiş manager şifresi';
+COMMENT ON COLUMN MOBILE_LDAP_SETTINGS.PASSWORD_ENCODER_TYPE IS 'Kullanıcı şifreleme algoritması (bcrypt, sha256, etc.)';
+
+-- ----------------------------------------------------------------------------
+-- 7) APP_USERS — Uygulama kullanıcıları (AppUser.java)
+-- ----------------------------------------------------------------------------
+CREATE TABLE APP_USERS (
+    ID               NUMBER(10) GENERATED ALWAYS AS IDENTITY,
+    USERNAME         VARCHAR2(100)  NOT NULL,
+    PASSWORD_HASH    VARCHAR2(1000),
+    ROLE             VARCHAR2(50)   NOT NULL,
+    SOURCE           VARCHAR2(50)   NOT NULL,
+    CREATED_AT       TIMESTAMP(6)   DEFAULT CURRENT_TIMESTAMP,
+    UPDATED_AT       TIMESTAMP(6)   DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT PK_APP_USERS PRIMARY KEY (ID),
+    CONSTRAINT UQ_APP_USERS_USERNAME UNIQUE (USERNAME),
+    CONSTRAINT CK_APP_USERS_SOURCE CHECK (SOURCE IN ('LOCAL', 'LDAP')),
+    CONSTRAINT CK_APP_USERS_ROLE CHECK (ROLE IN ('ADMIN', 'USER', 'SUPERADMIN'))
+);
+
+COMMENT ON TABLE APP_USERS IS 'Uygulama kullanıcıları (yerel ve LDAP)';
+COMMENT ON COLUMN APP_USERS.PASSWORD_HASH IS 'LOCAL kullanıcılar için BCrypt hash, LDAP kullanıcıları için NULL';
+COMMENT ON COLUMN APP_USERS.SOURCE IS 'Kullanıcı kaynağı: LOCAL (manuel) veya LDAP';
+
+-- ----------------------------------------------------------------------------
+-- 8) APP_SETTINGS — Uygulama genel ayarları (AppSettings.java)
+--    Tek satırlık tablo: her zaman ID = 1
+-- ----------------------------------------------------------------------------
+CREATE TABLE APP_SETTINGS (
+    ID               NUMBER(10)  DEFAULT 1 NOT NULL,
+    APP_PACKAGE      VARCHAR2(255),
+    APP_ACTIVITY     VARCHAR2(255),
+    MAX_STEPS        NUMBER(3)    DEFAULT 15,
+    CONSTRAINT PK_APP_SETTINGS PRIMARY KEY (ID),
+    CONSTRAINT CK_APP_SETTINGS_ID CHECK (ID = 1)
+);
+
+COMMENT ON TABLE APP_SETTINGS IS 'Uygulama genel ayarları (tek satır, ID=1)';
+COMMENT ON COLUMN APP_SETTINGS.APP_PACKAGE IS 'Android paket adı (örn: com.saucelabs.SwagLabsMobileApp)';
+COMMENT ON COLUMN APP_SETTINGS.APP_ACTIVITY IS 'Android activity adı (örn: com.hepsiburada.ui.startup.SplashActivity)';
+COMMENT ON COLUMN APP_SETTINGS.MAX_STEPS IS 'Bir test koşumunda maksimum adım sayısı';
+
+-- ----------------------------------------------------------------------------
 -- İndeksler — RunController.listRuns() startedAt'e göre sıralıyor,
 -- RunController/NightlySuiteScheduler status ve nightlySuite'e göre filtreliyor.
 -- ----------------------------------------------------------------------------

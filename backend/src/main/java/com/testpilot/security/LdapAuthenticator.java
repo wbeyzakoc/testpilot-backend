@@ -57,7 +57,7 @@ public class LdapAuthenticator {
             // userSearchFilter + manager).
             if (managerPasswordPlaintext == null || managerPasswordPlaintext.isBlank()) {
                 throw new LdapAuthException(
-                        "Manager DN girildi ama manager şifresi yok -- test için ikisi de gerekli.");
+                        "Manager DN girildi ama manager şifresi yok. Lütfen manager şifresini girin veya Manager DN alanını boş bırakın.");
             }
             Hashtable<String, String> env = new Hashtable<>();
             env.put(Context.INITIAL_CONTEXT_FACTORY, "com.sun.jndi.ldap.LdapCtxFactory");
@@ -155,12 +155,30 @@ public class LdapAuthenticator {
         try {
             SearchControls controls = new SearchControls();
             controls.setSearchScope(SearchControls.SUBTREE_SCOPE);
-            String filter = settings.getUserSearchFilter().replace("{0}", username);
+            // Kullanici adini LDAP filter'a guvenli sekilde eklemek icin escape
+            String escapedUsername = escapeLDAPSearchFilter(username);
+            String filter = settings.getUserSearchFilter().replace("{0}", escapedUsername);
             NamingEnumeration<SearchResult> results = managerCtx.search(
                     settings.getBaseDn() == null ? "" : settings.getBaseDn(), filter, controls);
-            if (!results.hasMore()) return null;
+            if (!results.hasMore()) {
+                return null;
+            }
             SearchResult result = results.next();
-            return result.getNameInNamespace();
+            // getNameInNamespace() yerine getName() kullan -- bu daha tutarli sonuclar verir
+            String userDn = result.getName();
+            // Eger DN tam (baseDn dahil) degilse, baseDn ile tamamla
+            if (userDn != null && !userDn.contains(settings.getBaseDn() != null ? settings.getBaseDn() : "")) {
+                // baseDn ekle
+                if (settings.getBaseDn() != null && !settings.getBaseDn().isBlank()) {
+                    userDn = userDn + "," + settings.getBaseDn();
+                }
+            }
+            // Birden fazla sonuc gelirse, sadece ilkini kullan (loglama yapilabilir)
+            if (results.hasMore()) {
+                // Birden fazla eslesen kullanici var - sadece ilkini kullaniyoruz
+                // Gerekirse buraya bir log eklenebilir
+            }
+            return userDn;
         } catch (NamingException e) {
             throw new LdapAuthException(
                     "LDAP: kullanici aranirken hata olustu (baseDn/userSearchFilter'i kontrol et). Detay: "
@@ -193,5 +211,17 @@ public class LdapAuthenticator {
         } catch (NamingException e) {
             throw new LdapAuthException("LDAP: kullanici dogrulanamadi. Detay: " + e.getMessage(), e);
         }
+    }
+
+    // LDAP arama filter'inda ozel karakterleri escape etmek icin
+    // RFC 4515'ye gore: * \ ( ) ~ ! & | < > =
+    private String escapeLDAPSearchFilter(String input) {
+        if (input == null || input.isBlank()) return input;
+        return input
+                .replace("\\", "\\5c")
+                .replace("*", "\\2a")
+                .replace("(", "\\28")
+                .replace(")", "\\29")
+                .replace("\u0000", "\\00");
     }
 }

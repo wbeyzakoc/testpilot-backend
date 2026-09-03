@@ -275,7 +275,7 @@ public class RunController {
                     continue;
                 }
 
-                String currentSignature = action.getAction() + "|" + action.getTarget() + "|" + filteredPageSource.hashCode();
+                String currentSignature = action.getAction() + "|" + action.getTarget();
                 if (currentSignature.equals(lastActionSignature)) {
                     repeatCount++;
                 } else {

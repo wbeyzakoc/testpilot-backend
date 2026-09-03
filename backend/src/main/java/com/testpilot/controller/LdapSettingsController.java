@@ -58,14 +58,30 @@ public class LdapSettingsController {
         LdapSettings candidate = new LdapSettings();
         candidate.setUrl(request.getUrl());
         candidate.setManagerDn(request.getManagerDn());
-        String managerPasswordPlaintext =
-                (request.getManagerPassword() != null && !request.getManagerPassword().isBlank())
-                        ? request.getManagerPassword()
-                        : credentialEncryptor.decrypt(settings.getManagerPasswordEncrypted());
-        try {
-            ldapAuthenticator.testConnection(candidate, managerPasswordPlaintext);
-        } catch (LdapAuthException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        
+        // Şifre belirleme mantığı:
+        // 1. Yeni şifre gönderildiyse -> yeni şifreyi kullan
+        // 2. Yeni şifre gönderilmediyse ama mevcut şifre varsa -> mevcut şifreyi kullan
+        // 3. Ne yeni ne mevcut şifre varsa -> null (managerDn boşsa sorun yok, doluysa testConnection hata verir)
+        String managerPasswordPlaintext = null;
+        if (request.getManagerPassword() != null && !request.getManagerPassword().isBlank()) {
+            // Yeni şifre gönderilmiş
+            managerPasswordPlaintext = request.getManagerPassword();
+        } else if (settings.getManagerPasswordEncrypted() != null && !settings.getManagerPasswordEncrypted().isBlank()) {
+            // Yeni şifre yok ama mevcut şifre var -> mevcut şifreyi kullan
+            managerPasswordPlaintext = credentialEncryptor.decrypt(settings.getManagerPasswordEncrypted());
+        }
+        
+        // LDAP URL dolu VE manager DN de doluysa bağlantı testi yap
+        // (Manager DN boşsa userDnPattern ile doğrudan kullanıcı bağlanacak,
+        // gerçek bir kullanıcı şifremiz olmadığı için test edemeyiz)
+        if (request.getUrl() != null && !request.getUrl().isBlank() &&
+            request.getManagerDn() != null && !request.getManagerDn().isBlank()) {
+            try {
+                ldapAuthenticator.testConnection(candidate, managerPasswordPlaintext);
+            } catch (LdapAuthException e) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+            }
         }
 
         settings.setUrl(request.getUrl());
