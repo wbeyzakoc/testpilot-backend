@@ -9,9 +9,11 @@ import com.testpilot.model.Run;
 import com.testpilot.model.UserRole;
 import com.testpilot.model.UserSource;
 import com.testpilot.repository.AppUserRepository;
+import com.testpilot.repository.ProjectRepository;
 import com.testpilot.security.CurrentUserResolver;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -29,13 +31,16 @@ public class UserController {
     private final PasswordEncoder passwordEncoder;
     private final CurrentUserResolver currentUserResolver;
     private final RunStore runStore;
+    private final ProjectRepository projectRepository;
 
     public UserController(AppUserRepository userRepository, PasswordEncoder passwordEncoder,
-                           CurrentUserResolver currentUserResolver, RunStore runStore) {
+                           CurrentUserResolver currentUserResolver, RunStore runStore,
+                           ProjectRepository projectRepository) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.currentUserResolver = currentUserResolver;
         this.runStore = runStore;
+        this.projectRepository = projectRepository;
     }
 
     // Bu panel sadece admin rolündeki kullanıcılara açık. Her kullanıcının kaç
@@ -114,5 +119,28 @@ public class UserController {
         user.setRole(request.getRole());
         userRepository.save(user);
         return AppUserDto.from(user);
+    }
+
+    // Önceden hiç yoktu -- admin kullanıcı oluşturabiliyor, rolünü
+    // değiştirebiliyordu ama silemiyordu. Kendi hesabını silmesini engelliyoruz
+    // (yoksa panele erişimini kaybedip kimse geri alamaz -- updateRole'deki aynı
+    // koruma). Silmeden önce kullanıcıyı tüm projelerin üye listesinden
+    // (mobile_project_members) çıkarıyoruz, yoksa FK kısıtı yüzünden silme
+    // başarısız olur. Run.createdBy sadece düz bir kullanıcı adı string'i
+    // (gerçek bir FK değil), o yüzden geçmiş test kayıtları etkilenmez --
+    // kullanıcı silinse de kimin oluşturduğu bilgisi Test History'de durmaya
+    // devam eder.
+    @DeleteMapping("/{id}")
+    @Transactional
+    public void deleteUser(@RequestHeader(value = "X-Username", required = false) String requester,
+                            @PathVariable Long id) {
+        AppUser admin = currentUserResolver.requireAdmin(requester);
+        if (admin.getId().equals(id)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Kendi hesabınızı silemezsiniz");
+        }
+        AppUser user = userRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Kullanıcı bulunamadı"));
+        projectRepository.removeUserFromAllProjects(id);
+        userRepository.delete(user);
     }
 }

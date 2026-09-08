@@ -2,6 +2,8 @@ package com.testpilot.model;
 
 import jakarta.persistence.*;
 
+import java.time.Instant;
+
 // application.properties'te sabit duran, ama aslında koşum sırasında değişebilmesi
 // gereken ayarların DB'deki karşılığı (openrouter api key/model, appium grid url,
 // varsayılan Android paket/activity, maksimum adım sayısı). LdapSettings gibi tek
@@ -53,6 +55,27 @@ public class AppSettings {
     @Column(name = "platform_version", length = 50)
     private String platformVersion;
 
+    // Gece koşumu saati -- önceden NightlySuiteScheduler icinde sadece bellekte
+    // (AtomicInteger) tutuluyordu, backend her yeniden baslatildiginda sessizce
+    // varsayilana (02:00) donuyordu. Artik bu tek satirlik ayar tablosunda
+    // kaliciyorlar. NULL olabilir (mevcut kurulumlarda bu kolonlar yeni eklendigi
+    // icin eski satirda bos gelir) -- NightlySuiteScheduler bu durumda 2/0
+    // varsayilanina duser.
+    @Column(name = "nightly_hour")
+    private Integer nightlyHour;
+
+    @Column(name = "nightly_minute")
+    private Integer nightlyMinute;
+
+    // Dashboard'daki "Raporu Temizle" butonuna en son ne zaman basıldığı --
+    // AllureController.generate bundan ÖNCE biten run'ları rapora dahil
+    // etmiyor, böylece "Temizle"den sonra ilk üretilen rapor gerçekten
+    // boş/temiz görünüyor (aksi halde run'lar DB'de durduğu için hep
+    // "tüm koşumlar" geri geliyordu -- Temizle sadece eski statik siteyi
+    // siliyor, veriye dokunmuyordu).
+    @Column(name = "allure_cleared_at")
+    private Instant allureClearedAt;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public String getOpenrouterApiKeyEncrypted() { return openrouterApiKeyEncrypted; }
@@ -73,4 +96,10 @@ public class AppSettings {
     public void setDeviceName(String deviceName) { this.deviceName = deviceName; }
     public String getPlatformVersion() { return platformVersion; }
     public void setPlatformVersion(String platformVersion) { this.platformVersion = platformVersion; }
+    public Integer getNightlyHour() { return nightlyHour; }
+    public void setNightlyHour(Integer nightlyHour) { this.nightlyHour = nightlyHour; }
+    public Integer getNightlyMinute() { return nightlyMinute; }
+    public void setNightlyMinute(Integer nightlyMinute) { this.nightlyMinute = nightlyMinute; }
+    public Instant getAllureClearedAt() { return allureClearedAt; }
+    public void setAllureClearedAt(Instant allureClearedAt) { this.allureClearedAt = allureClearedAt; }
 }

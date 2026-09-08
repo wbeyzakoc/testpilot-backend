@@ -5,9 +5,12 @@ import org.springframework.http.ResponseEntity;
 import com.testpilot.agent.LlmAgent;
 import com.testpilot.agent.RunStore;
 import com.testpilot.appium.AppiumDriverManager;
+import com.testpilot.dto.AssignProjectRequest;
+import com.testpilot.dto.AssignSuiteRequest;
 import com.testpilot.model.*;
 import com.testpilot.repository.AppUserRepository;
 import com.testpilot.repository.ProjectRepository;
+import com.testpilot.repository.SuiteRepository;
 import com.testpilot.settings.AppSettingsService;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
@@ -53,17 +56,19 @@ public class RunController {
     private final ProjectRepository projectRepository;
     private final AppUserRepository userRepository;
     private final AppSettingsService appSettingsService;
+    private final SuiteRepository suiteRepository;
     private final Map<String, String> liveScreenshots = new ConcurrentHashMap<>();
 
     public RunController(AppiumDriverManager appiumDriverManager, LlmAgent llmAgent, RunStore runStore,
                           ProjectRepository projectRepository, AppUserRepository userRepository,
-                          AppSettingsService appSettingsService) {
+                          AppSettingsService appSettingsService, SuiteRepository suiteRepository) {
         this.appiumDriverManager = appiumDriverManager;
         this.llmAgent = llmAgent;
         this.runStore = runStore;
         this.projectRepository = projectRepository;
         this.userRepository = userRepository;
         this.appSettingsService = appSettingsService;
+        this.suiteRepository = suiteRepository;
     }
 
     @DeleteMapping("/{id}")
@@ -134,6 +139,183 @@ public class RunController {
         runStore.save(run);
         return run;
     }
+
+    // Test History'de secilen testleri (toplu) bir projeye ekler/tasir. projectId
+    // null gelirse secilenlerin proje baglantisi tamamen kaldirilir (projectId/
+    // projectName null olur). launchRun'daki ayni admin/uye kontrolu burada da
+    // var -- bir USER, uyesi olmadigi bir projeye test ekleyemesin diye.
+    // @Transactional sart: project.getMembers() (lazy @ManyToMany) okunuyor --
+    // createRun/listProjects'teki ayni sebep.
+    @PostMapping("/assign-project")
+    @Transactional(readOnly = true)
+    public List<Run> assignProject(@RequestHeader(value = "X-Username", required = false) String requester,
+                                    @RequestBody AssignProjectRequest request) {
+        if (request.getRunIds() == null || request.getRunIds().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "runIds boş olamaz");
+        }
+
+        String projectName = null;
+        if (request.getProjectId() != null) {
+            Project project = projectRepository.findById(request.getProjectId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Proje bulunamadı"));
+            AppUser user = requester != null ? userRepository.findByUsernameIgnoreCase(requester).orElse(null) : null;
+            boolean isAdmin = user != null && user.getRole() == UserRole.ADMIN;
+            boolean isMember = user != null && project.getMembers().stream()
+                    .anyMatch(m -> m.getId().equals(user.getId()));
+            if (!isAdmin && !isMember) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Bu projede test oluşturma yetkiniz yok");
+            }
+            projectName = project.getName();
+        }
+
+        List<Run> updated = new java.util.ArrayList<>();
+        for (String runId : request.getRunIds()) {
+            Run run = runStore.get(runId);
+            if (run == null) continue;
+            run.setProjectId(request.getProjectId());
+            run.setProjectName(projectName);
+            runStore.save(run);
+            updated.add(run);
+        }
+        return updated;
+    }
+
+    // Test History'de seçilen testleri (toplu) bir suite'e ekler/taşır. suiteId
+    // null gelirse seçili testlerin suite bağlantısı tamamen kaldırılır (suiteId/
+    // suiteName null olur, projesi değişmez). suiteId verilirse -- suite zaten
+    // bir projeye ait olduğu için -- testin projectId/projectName'i de o
+    // suite'in projesiyle eşleşecek şekilde GÜNCELLENİR (assign-project'teki gibi
+    // ayrı bir "proje uyuşmazlığı" hatası vermek yerine, "bu suite'e eklendiyse
+    // artık o projenin testi" mantığı izleniyor). Yetki kontrolü assign-project
+    // ile aynı: admin ya da suite'in projesinin üyesi olmak gerekiyor.
+    // Test History'deki ve Suite'ler sayfasındaki "suite'e ekle" özelliği bunu
+    // çağırır. Proje ile arasındaki FARK: bir test AYNI ANDA BİRDEN FAZLA
+    // suite'e ait olabilir, bu yüzden burası "SET" değil "ADD" -- testin zaten
+    // içinde olduğu diğer suite'lere dokunmaz, sadece bu suiteId'yi listeye
+    // ekler (zaten varsa tekrar eklemez).
+    //
+    // Proje kuralı: suite zaten bir projeye ait olduğu için, testin projesiyle
+    // suite'in projesi UYUŞMUYORSA istek reddedilir (testi yanlışlıkla başka
+    // bir projeye "taşımamak" için) -- testin hiç projesi yoksa otomatik olarak
+    // suite'in projesine atanır. Önce TÜM runId'ler doğrulanır, biri bile
+    // uyuşmuyorsa hiçbiri güncellenmez (yarım uygulanmış toplu işlem olmasın diye).
+    @PostMapping("/assign-suite")
+    @Transactional(readOnly = true)
+    public List<Run> assignSuite(@RequestHeader(value = "X-Username", required = false) String requester,
+                                  @RequestBody AssignSuiteRequest request) {
+        if (request.getRunIds() == null || request.getRunIds().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "runIds boş olamaz");
+        }
+        if (request.getSuiteId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "suiteId boş olamaz");
+        }
+
+        Suite suite = suiteRepository.findById(request.getSuiteId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Suite bulunamadı"));
+        Project project = suite.getProject();
+        AppUser user = requester != null ? userRepository.findByUsernameIgnoreCase(requester).orElse(null) : null;
+        boolean isAdmin = user != null && user.getRole() == UserRole.ADMIN;
+        boolean isMember = user != null && project.getMembers().stream()
+                .anyMatch(m -> m.getId().equals(user.getId()));
+        if (!isAdmin && !isMember) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Bu projede test oluşturma yetkiniz yok");
+        }
+
+        List<Run> targetRuns = new java.util.ArrayList<>();
+        for (String runId : request.getRunIds()) {
+            Run run = runStore.get(runId);
+            if (run == null) continue;
+            if (run.getProjectId() != null && !run.getProjectId().equals(project.getId())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "\"" + (run.getName() != null ? run.getName() : run.getGoal()) + "\" farklı bir projeye ait ("
+                                + run.getProjectName() + "), önce o projeden çıkarman gerekiyor");
+            }
+            targetRuns.add(run);
+        }
+
+        List<Run> updated = new java.util.ArrayList<>();
+        for (Run run : targetRuns) {
+            if (run.getProjectId() == null) {
+                run.setProjectId(project.getId());
+                run.setProjectName(project.getName());
+            }
+            boolean alreadyInSuite = run.getSuites().stream().anyMatch(s -> s.getId().equals(suite.getId()));
+            if (!alreadyInSuite) {
+                run.getSuites().add(new SuiteRef(suite.getId(), suite.getName()));
+            }
+            runStore.save(run);
+            updated.add(run);
+        }
+        return updated;
+    }
+
+    // suites.tsx'teki runSuite() bir suite'i GERÇEKTEN çalıştırdığında (SWAP
+    // sonrası) o anda üretilen yeni run'ların id'lerini, hangi suite'in
+    // koşumu olduğuyla birlikte buraya bildirir. Bu üç alan (suiteRunAt +
+    // suiteRunSuiteId + suiteRunSuiteName) run'ın ÜZERİNDE KALICI olarak
+    // damgalanıyor -- suite daha sonra tekrar koşulup bu run suite'ten
+    // çıkarılsa (swap) bile bu damga hiç değişmiyor. Test History'nin suite
+    // gruplaması (history.tsx) canlı suite üyeliğine değil, BU damgaya
+    // bakıyor -- böylece bir suite N kere koşulduğunda N farklı koşum da
+    // (o anki test sayılarıyla) ayrı ayrı gruplar olarak kalıcı biçimde
+    // görünmeye devam ediyor; suite'e sonradan manuel eklenen (damgasız)
+    // bir test de hiçbir eski gruba karışmıyor. Yetki kontrolüne gerek yok --
+    // yalnızca frontend'in zaten suite'i başarıyla koşturduğu run'lar için
+    // çağrılıyor.
+    @PostMapping("/mark-suite-run")
+    @Transactional(readOnly = true)
+    public void markSuiteRun(@RequestBody AssignSuiteRequest request) {
+        if (request.getRunIds() == null || request.getSuiteId() == null) return;
+        Suite suite = suiteRepository.findById(request.getSuiteId()).orElse(null);
+        if (suite == null) return;
+        String now = Instant.now().toString();
+        for (String runId : request.getRunIds()) {
+            Run run = runStore.get(runId);
+            if (run == null) continue;
+            run.setSuiteRunAt(now);
+            run.setSuiteRunSuiteId(suite.getId());
+            run.setSuiteRunSuiteName(suite.getName());
+            runStore.save(run);
+        }
+    }
+
+    // Bir testi belirli bir suite'ten çıkarır -- diğer suite'lerine ve
+    // projesine dokunmaz (assign-suite'in tersi, "REMOVE" işlemi). Yetki
+    // kontrolü assign-suite ile aynı: admin ya da suite'in projesinin üyesi
+    // olmak gerekiyor.
+    @PostMapping("/unassign-suite")
+    @Transactional(readOnly = true)
+    public List<Run> unassignSuite(@RequestHeader(value = "X-Username", required = false) String requester,
+                                    @RequestBody AssignSuiteRequest request) {
+        if (request.getRunIds() == null || request.getRunIds().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "runIds boş olamaz");
+        }
+        if (request.getSuiteId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "suiteId boş olamaz");
+        }
+
+        Suite suite = suiteRepository.findById(request.getSuiteId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Suite bulunamadı"));
+        Project project = suite.getProject();
+        AppUser user = requester != null ? userRepository.findByUsernameIgnoreCase(requester).orElse(null) : null;
+        boolean isAdmin = user != null && user.getRole() == UserRole.ADMIN;
+        boolean isMember = user != null && project.getMembers().stream()
+                .anyMatch(m -> m.getId().equals(user.getId()));
+        if (!isAdmin && !isMember) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Bu projede test düzenleme yetkiniz yok");
+        }
+
+        List<Run> updated = new java.util.ArrayList<>();
+        for (String runId : request.getRunIds()) {
+            Run run = runStore.get(runId);
+            if (run == null) continue;
+            run.getSuites().removeIf(s -> s.getId().equals(request.getSuiteId()));
+            runStore.save(run);
+            updated.add(run);
+        }
+        return updated;
+    }
+
     @PostMapping("/{id}/suggestions/page")
     public List<ScenarioSuggestion> suggestScenariosForPage(
             @PathVariable String id,
@@ -218,10 +400,29 @@ public class RunController {
         return result;
     }
 
+    // ÖNEMLİ: sadece "stopRequested" bayrağını set edip arka plan thread'inin
+    // fark etmesini BEKLEMİYORUZ artık -- executeRun döngüsü bu bayrağı
+    // sadece her ADIM başında kontrol ediyor (LLM'e "sıradaki aksiyon ne"
+    // diye sorduğu ya da Appium'a bir dokunma/kaydırma gönderdiği sırada
+    // DEĞİL) -- model API'si yavaş yanıt verirse (bazen 10-20+ saniye) bu
+    // kontrol arada çok geç geliyor ve kullanıcıya "Durdur'a bastım, hiçbir
+    // şey olmadı" gibi görünüyordu. Şimdi run hâlâ "running" ise durumu
+    // BURADA, anında "stopped" olarak işaretliyoruz -- UI (2sn'de bir polling
+    // yapıyor) neredeyse anında güncelleniyor. Arka plandaki thread kendi
+    // adımını bitirip stopRequested'i fark ettiğinde AYNI "stopped" durumunu
+    // tekrar yazıp gerçek temizliği (Appium session'ı kapatma, video kaydını
+    // durdurup kaydetme -- executeRun'ın finally bloğu) yine kendisi yapıyor,
+    // sadece kullanıcı bunun bitmesini beklemek zorunda kalmıyor.
     @PostMapping("/{id}/stop")
     public void stopRun(@PathVariable String id) {
         Run run = runStore.get(id);
-        if (run != null) run.setStopRequested(true);
+        if (run == null) return;
+        run.setStopRequested(true);
+        if ("running".equals(run.getStatus())) {
+            run.setStatus("stopped");
+            run.setFinishedAt(Instant.now().toString());
+            runStore.save(run);
+        }
     }
 
     private void executeRun(Run run, Map<String, String> variables, String platform, String appPackage, String appActivity, boolean captureScreenshot, boolean recordVideo, boolean parallel) {        int consecutiveFails = 0;

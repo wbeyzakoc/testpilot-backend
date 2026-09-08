@@ -92,10 +92,47 @@ public class Run {//bir testin tüm durumu
     private String projectName;
     private String createdBy;
 
+    // Suite'ler (bir projenin testlerini gruplayan alt kümeler) -- projeden farklı
+    // olarak bir test AYNI ANDA BİRDEN FAZLA suite'e ait olabilir (örn. "giriş
+    // yap" testi hem Smoke hem Regression suite'inde olabilir), bu yüzden tekil
+    // bir alan yerine liste. Suite entity'sine ilişki kurmak yerine (projectId/
+    // projectName'deki gibi) düz id+name kopyaları tutuluyor. Boş liste = test
+    // hiçbir suite'e ait değil.
+    private List<SuiteRef> suites = new java.util.ArrayList<>();
+
+    // Bu run'ın "Bu Suite'i Çalıştır" ile GERÇEKTEN bir suite koşumu sonucu
+    // üretilip üretilmediği -- null ise bu run ya hiç bir suite'e ait değil ya
+    // da suite'e SONRADAN manuel eklendi (Test Ekle / History'deki "Suite'e
+    // Ekle"), suite ile birlikte hiç koşulmadı. Test History'nin suite
+    // gruplaması (history.tsx) sadece bu alanı dolu olan run'ları suite
+    // grubuna dahil ediyor -- böylece bir suite koşulduktan SONRA ona manuel
+    // eklenen bir test, o önceki koşumun grubuna yanlışlıkla karışmıyor.
+    private String suiteRunAt;
+
+    // suiteRunAt ile BİRLİKTE, o an hangi suite'in koşumu olduğu da kalıcı
+    // olarak damgalanıyor (id + o zamanki isim). Bunlar run.suites (canlı,
+    // "Test Ekle"/swap ile değişebilen üyelik) listesinden BAĞIMSIZ -- suite
+    // daha sonra yeniden koşulup bu run suite'ten çıkarılsa (swap) BİLE, bu
+    // run'ın "hangi koşumdan doğduğu" bilgisi hiç değişmez. Test History'nin
+    // suite gruplaması artık BUNA bakıyor (suiteId+suiteRunAt eşleşmesi),
+    // canlı suite üyeliğine değil -- böylece bir suite birden fazla kez
+    // koşulduğunda HER koşum kendi grubunda ayrı ayrı görünmeye devam eder.
+    private Long suiteRunSuiteId;
+    private String suiteRunSuiteName;
+
+    public String getSuiteRunAt() { return suiteRunAt; }
+    public void setSuiteRunAt(String suiteRunAt) { this.suiteRunAt = suiteRunAt; }
+    public Long getSuiteRunSuiteId() { return suiteRunSuiteId; }
+    public void setSuiteRunSuiteId(Long suiteRunSuiteId) { this.suiteRunSuiteId = suiteRunSuiteId; }
+    public String getSuiteRunSuiteName() { return suiteRunSuiteName; }
+    public void setSuiteRunSuiteName(String suiteRunSuiteName) { this.suiteRunSuiteName = suiteRunSuiteName; }
+
     public Long getProjectId() { return projectId; }
     public void setProjectId(Long projectId) { this.projectId = projectId; }
     public String getProjectName() { return projectName; }
     public void setProjectName(String projectName) { this.projectName = projectName; }
     public String getCreatedBy() { return createdBy; }
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
+    public List<SuiteRef> getSuites() { return suites; }
+    public void setSuites(List<SuiteRef> suites) { this.suites = suites != null ? suites : new java.util.ArrayList<>(); }
 }

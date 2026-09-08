@@ -1,10 +1,13 @@
 package com.testpilot.model.entity;
 
+import com.testpilot.model.Suite;
 import jakarta.persistence.*;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 // Run/RunStep'in Oracle karsiligi -- ADITIF bir sinif, su an hicbir yerden
 // kullanilmiyor. Mevcut Run.java (JSON/runs-history.json icin kullanilan POJO)
@@ -97,6 +100,29 @@ public class RunEntity {
     @Column(name = "created_by", length = 255)
     private String createdBy;
 
+    // Bu run bir suite koşumu (RunController.markSuiteRun) ile mi üretildi --
+    // null ise suite'e sonradan manuel eklenmiş demektir, History'nin suite
+    // gruplaması bunu ayırt etmek için kullanıyor (bkz. Run.java'daki yorum).
+    @Column(name = "suite_run_at")
+    private Instant suiteRunAt;
+
+    @Column(name = "suite_run_suite_id")
+    private Long suiteRunSuiteId;
+
+    @Column(name = "suite_run_suite_name", length = 255)
+    private String suiteRunSuiteName;
+
+    // Suite<->Run cok-cok iliski -- bir test ayni anda birden fazla suite'e ait
+    // olabilir (Smoke + Regression gibi), bu yuzden Project.members'taki gibi
+    // ayri bir baglanti tablosu (mobile_run_suites) kullaniliyor.
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(
+            name = "mobile_run_suites",
+            joinColumns = @JoinColumn(name = "run_id"),
+            inverseJoinColumns = @JoinColumn(name = "suite_id")
+    )
+    private Set<Suite> suites = new HashSet<>();
+
     // List<ScenarioSuggestion> -- variables_json gibi, su asamada duz JSON metni.
     @Lob
     @Column(name = "suggestions_json")
@@ -142,12 +168,21 @@ public class RunEntity {
     public void setNightlySuite(boolean nightlySuite) { this.nightlySuite = nightlySuite; }
     public boolean isNightlyRun() { return nightlyRun; }
     public void setNightlyRun(boolean nightlyRun) { this.nightlyRun = nightlyRun; }
+
+    public Instant getSuiteRunAt() { return suiteRunAt; }
+    public void setSuiteRunAt(Instant suiteRunAt) { this.suiteRunAt = suiteRunAt; }
+    public Long getSuiteRunSuiteId() { return suiteRunSuiteId; }
+    public void setSuiteRunSuiteId(Long suiteRunSuiteId) { this.suiteRunSuiteId = suiteRunSuiteId; }
+    public String getSuiteRunSuiteName() { return suiteRunSuiteName; }
+    public void setSuiteRunSuiteName(String suiteRunSuiteName) { this.suiteRunSuiteName = suiteRunSuiteName; }
     public Long getProjectId() { return projectId; }
     public void setProjectId(Long projectId) { this.projectId = projectId; }
     public String getProjectName() { return projectName; }
     public void setProjectName(String projectName) { this.projectName = projectName; }
     public String getCreatedBy() { return createdBy; }
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
+    public Set<Suite> getSuites() { return suites; }
+    public void setSuites(Set<Suite> suites) { this.suites = suites; }
     public String getSuggestionsJson() { return suggestionsJson; }
     public void setSuggestionsJson(String suggestionsJson) { this.suggestionsJson = suggestionsJson; }
     public List<RunStepEntity> getSteps() { return steps; }

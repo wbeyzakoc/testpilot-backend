@@ -1,12 +1,16 @@
 package com.testpilot.controller;
 
+import com.testpilot.dto.AddProjectMembersRequest;
 import com.testpilot.dto.CreateProjectRequest;
 import com.testpilot.dto.ProjectDto;
 import com.testpilot.model.AppUser;
 import com.testpilot.model.Project;
+import com.testpilot.model.Suite;
 import com.testpilot.model.UserRole;
 import com.testpilot.repository.AppUserRepository;
 import com.testpilot.repository.ProjectRepository;
+import com.testpilot.repository.RunRepository;
+import com.testpilot.repository.SuiteRepository;
 import com.testpilot.security.CurrentUserResolver;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,12 +31,17 @@ public class ProjectController {
     private final ProjectRepository projectRepository;
     private final AppUserRepository userRepository;
     private final CurrentUserResolver currentUserResolver;
+    private final SuiteRepository suiteRepository;
+    private final RunRepository runRepository;
 
     public ProjectController(ProjectRepository projectRepository, AppUserRepository userRepository,
-                              CurrentUserResolver currentUserResolver) {
+                              CurrentUserResolver currentUserResolver, SuiteRepository suiteRepository,
+                              RunRepository runRepository) {
         this.projectRepository = projectRepository;
         this.userRepository = userRepository;
         this.currentUserResolver = currentUserResolver;
+        this.suiteRepository = suiteRepository;
+        this.runRepository = runRepository;
     }
 
     // Giriş yapmış herkes çağırabilir (Create Test'teki proje seçimi bunu kullanıyor) —
@@ -123,11 +132,45 @@ public class ProjectController {
         return ProjectDto.from(project);
     }
 
+    // Kullanıcılar sayfasındaki toplu "seçili kullanıcıları projeye ekle"
+    // butonu bunu çağırır. PUT /projects/{id}'nin aksine üye listesini
+    // TAMAMEN değiştirmez — sadece verilen userId'leri mevcut üye kümesine
+    // ekler (zaten üye olanlar bir şey değişmez, projenin başka üyeleri
+    // silinmez). Set olduğu için aynı kullanıcı iki kez gönderilse bile
+    // tekilleşir.
+    @PostMapping("/{id}/members")
+    @Transactional
+    public ProjectDto addMembers(@RequestHeader(value = "X-Username", required = false) String requester,
+                                  @PathVariable Long id,
+                                  @RequestBody AddProjectMembersRequest request) {
+        currentUserResolver.requireAdmin(requester);
+        Project project = projectRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Proje bulunamadı"));
+
+        if (request.getUserIds() == null || request.getUserIds().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userIds boş olamaz");
+        }
+        List<AppUser> usersToAdd = userRepository.findAllById(request.getUserIds());
+        project.getMembers().addAll(usersToAdd);
+
+        projectRepository.save(project);
+        return ProjectDto.from(project);
+    }
+
     // Proje silme sadece admin. project_members'taki ilgili satırlar Hibernate
     // tarafından otomatik temizlenir (ayrıca elle silmeye gerek yok). Bu
     // projeye ait eski test kayıtları (runs-history.json) etkilenmez — Run'da
     // projectName ayrıca kopyalanmış olduğu için geçmişte hangi proje adıyla
     // koşulduğu görünmeye devam eder, sadece projectId artık geçersiz olur.
+    // Önceden burada sadece projectRepository.deleteById(id) vardı -- Suite'in
+    // projeye bağı zorunlu (nullable=false) bir @ManyToOne olduğu için, üstünde
+    // suite'i olan bir projeyi silmeye çalışmak Oracle'da FK kısıt ihlaline
+    // (çirkin, kullanıcıya anlamsız gelen bir hata) çarpıyordu. Şimdi projeye
+    // ait suite'ler -- SuiteController.deleteSuite'teki AYNI temizlik adımıyla
+    // (önce run'lardaki suite referansları, sonra suite'in kendisi) -- proje
+    // silinmeden önce siliniyor. Run.projectId gerçek bir FK olmadığı için
+    // (düz kolon) onlara dokunmuyoruz; proje silindikten sonra o run'lar Test
+    // History'de proje bilgisi olmadan görünmeye devam eder.
     @DeleteMapping("/{id}")
     @Transactional
     public void deleteProject(@RequestHeader(value = "X-Username", required = false) String requester,
@@ -135,6 +178,13 @@ public class ProjectController {
         currentUserResolver.requireAdmin(requester);
         if (!projectRepository.existsById(id)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Proje bulunamadı");
+        }
+        List<Suite> suites = suiteRepository.findByProject_Id(id);
+        for (Suite suite : suites) {
+            runRepository.clearSuiteReferences(suite.getId());
+        }
+        if (!suites.isEmpty()) {
+            suiteRepository.deleteAll(suites);
         }
         projectRepository.deleteById(id);
     }

@@ -14,6 +14,8 @@ import javax.naming.directory.SearchControls;
 import javax.naming.directory.SearchResult;
 import java.util.Hashtable;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 // Sirket LDAP'ina karsi kullanici dogrulamasi. Ekstra bir kutuphane (spring-ldap)
 // eklemedik -- JDK'nin kendi javax.naming (JNDI) LDAP istemcisi yeterli.
 //
@@ -31,6 +33,8 @@ import java.util.Hashtable;
 // backend konsoluna bakmadan direkt ekranda gorebiliyoruz.
 @Component
 public class LdapAuthenticator {
+
+    private static final Logger log = LoggerFactory.getLogger(LdapAuthenticator.class);
 
     private final CredentialEncryptor credentialEncryptor;
 
@@ -52,12 +56,9 @@ public class LdapAuthenticator {
         }
 
         if (settings.getManagerDn() != null && !settings.getManagerDn().isBlank()) {
-            // Manager hesabıyla bağlanıyoruz -- URL, managerDn ve manager şifresinin
-            // üçünün de doğru olduğunu tek seferde doğrular (en yaygın kurulum şekli:
-            // userSearchFilter + manager).
             if (managerPasswordPlaintext == null || managerPasswordPlaintext.isBlank()) {
                 throw new LdapAuthException(
-                        "Manager DN girildi ama manager şifresi yok. Lütfen manager şifresini girin veya Manager DN alanını boş bırakın.");
+                        "Manager DN girildi ama manager şifresi yok -- test için ikisi de gerekli.");
             }
             Hashtable<String, String> env = new Hashtable<>();
             env.put(Context.INITIAL_CONTEXT_FACTORY, "com.sun.jndi.ldap.LdapCtxFactory");
@@ -65,41 +66,47 @@ public class LdapAuthenticator {
             env.put(Context.SECURITY_AUTHENTICATION, "simple");
             env.put(Context.SECURITY_PRINCIPAL, settings.getManagerDn());
             env.put(Context.SECURITY_CREDENTIALS, managerPasswordPlaintext);
+            env.put("com.sun.jndi.ldap.connect.timeout", "5000");
+            env.put("com.sun.jndi.ldap.read.timeout", "5000");
+
             try {
                 DirContext ctx = new InitialDirContext(env);
                 ctx.close();
             } catch (AuthenticationException e) {
+                log.error("LDAP test - manager kimlik bilgileri reddedildi: url={}, managerDn={}", settings.getUrl(), settings.getManagerDn(), e);
                 throw new LdapAuthException(
                         "LDAP: manager hesabıyla bağlanılamadı -- kimlik bilgileri reddedildi. Detay: "
                                 + e.getMessage(), e);
             } catch (CommunicationException e) {
+                log.error("LDAP test - sunucuya ulasilamadi: url={}", settings.getUrl(), e);
                 throw new LdapAuthException(
                         "LDAP: sunucuya ulaşılamadı (" + settings.getUrl() + ") -- adres/port dogru mu, sunucu ayakta mi? Detay: "
                                 + e.getMessage(), e);
             } catch (NamingException e) {
-                throw new LdapAuthException("LDAP: bağlantı test edilemedi. Detay: " + e.getMessage(), e);
+                log.error("LDAP test baglantisi basarisiz - url={}, managerDn={}", settings.getUrl(), settings.getManagerDn(), e);
+                throw new LdapAuthException(
+                        "LDAP: kullanici aranirken hata olustu (baseDn/userSearchFilter'i kontrol et). Detay: "
+                                + e.getMessage(), e);
             }
         } else {
-            // Manager tanımlı değil (muhtemelen userDnPattern ile doğrudan bind
-            // kullanılacak) -- gerçek bir kullanıcı şifremiz olmadığı için tek
-            // yapabildiğimiz sunucuya en azından ulaşılabildiğini doğrulamak.
-            // Anonim bağlantı bazı sunucularda reddedilir, bu normal ve kritik
-            // değil -- asıl aradığımız CommunicationException (sunucu hiç yanıt
-            // vermiyor/adres yanlış).
             Hashtable<String, String> env = new Hashtable<>();
             env.put(Context.INITIAL_CONTEXT_FACTORY, "com.sun.jndi.ldap.LdapCtxFactory");
             env.put(Context.PROVIDER_URL, settings.getUrl());
+            env.put("com.sun.jndi.ldap.connect.timeout", "5000");
+            env.put("com.sun.jndi.ldap.read.timeout", "5000");
             try {
                 DirContext ctx = new InitialDirContext(env);
                 ctx.close();
             } catch (CommunicationException e) {
+                log.error("LDAP test (anonim) - sunucuya ulasilamadi: url={}", settings.getUrl(), e);
                 throw new LdapAuthException(
                         "LDAP: sunucuya ulaşılamadı (" + settings.getUrl() + ") -- adres/port dogru mu, sunucu ayakta mi? Detay: "
                                 + e.getMessage(), e);
-            } catch (NamingException ignored) {
-                // anonim bağlantı reddedildi ama sunucu yanıt verdi -- bu asamada yeterli
+            } catch (NamingException e) {
+                log.info("LDAP test (anonim) - baglanti reddedildi ama sunucu yanit verdi: {}", e.getMessage());
             }
         }
+
     }
 
     public boolean authenticate(LdapSettings settings, String username, String rawPassword) {
@@ -136,6 +143,9 @@ public class LdapAuthenticator {
         env.put(Context.SECURITY_AUTHENTICATION, "simple");
         env.put(Context.SECURITY_PRINCIPAL, settings.getManagerDn());
         env.put(Context.SECURITY_CREDENTIALS, credentialEncryptor.decrypt(settings.getManagerPasswordEncrypted()));
+        env.put("com.sun.jndi.ldap.connect.timeout", "5000");
+        env.put("com.sun.jndi.ldap.read.timeout", "5000");
+        env.put(Context.REFERRAL, "follow");
 
         DirContext managerCtx;
         try {
@@ -199,6 +209,8 @@ public class LdapAuthenticator {
         env.put(Context.SECURITY_AUTHENTICATION, "simple");
         env.put(Context.SECURITY_PRINCIPAL, userDn);
         env.put(Context.SECURITY_CREDENTIALS, password);
+        env.put("com.sun.jndi.ldap.connect.timeout", "5000");
+        env.put("com.sun.jndi.ldap.read.timeout", "5000");
         try {
             DirContext ctx = new InitialDirContext(env);
             ctx.close();

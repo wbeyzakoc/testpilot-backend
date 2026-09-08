@@ -6,6 +6,8 @@ import com.testpilot.security.CredentialEncryptor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
+
 // AppSettings tek satırlık (singleton) tablosunu okuyan/oluşturan merkezi yer —
 // LlmAgent, AppiumDriverManager ve RunController artık ayarlarını buradan alıyor
 // (application.properties'ten @Value ile DEĞİL).
@@ -58,5 +60,20 @@ public class AppSettingsService {
         String encrypted = getOrCreate().getOpenrouterApiKeyEncrypted();
         String decrypted = credentialEncryptor.decrypt(encrypted);
         return decrypted == null ? "" : decrypted;
+    }
+
+    // AllureController.generate -- bu tarihten ÖNCE biten run'lar rapora
+    // dahil edilmiyor. Hiç temizlenmemişse null döner (hiçbir şey filtrelenmez).
+    public Instant getAllureClearedAt() {
+        return getOrCreate().getAllureClearedAt();
+    }
+
+    // Dashboard'daki "Raporu Temizle" butonu -- statik siteyi silmenin
+    // yanında (AllureReportService.clear) bu "kesim tarihini" de şimdiye
+    // çekiyor, böylece bir sonraki rapor üretimi eski run'ları içermiyor.
+    public void markAllureCleared() {
+        AppSettings settings = getOrCreate();
+        settings.setAllureClearedAt(Instant.now());
+        repository.save(settings);
     }
 }

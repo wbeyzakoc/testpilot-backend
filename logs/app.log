@@ -1,0 +1,164 @@
+2026-09-03T11:44:33.549+03:00  INFO 7330 --- [main] com.testpilot.TestPilotApplication       : Starting TestPilotApplication using Java 25 with PID 7330 (/Users/beyzamacbook/IdeaProjects/ai-auto-testing/ai-auto-testing-backend/backend/target/classes started by beyzamacbook in /Users/beyzamacbook/IdeaProjects/ai-auto-testing/ai-auto-testing-backend)
+2026-09-03T11:44:33.551+03:00 DEBUG 7330 --- [main] com.testpilot.TestPilotApplication       : Running with Spring Boot v3.3.4, Spring v6.1.13
+2026-09-03T11:44:33.551+03:00  INFO 7330 --- [main] com.testpilot.TestPilotApplication       : No active profile set, falling back to 1 default profile: "default"
+2026-09-03T11:44:34.200+03:00  INFO 7330 --- [main] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+2026-09-03T11:44:34.249+03:00  INFO 7330 --- [main] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 44 ms. Found 6 JPA repository interfaces.
+2026-09-03T11:44:34.585+03:00  INFO 7330 --- [main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 4000 (http)
+2026-09-03T11:44:34.596+03:00  INFO 7330 --- [main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-09-03T11:44:34.596+03:00  INFO 7330 --- [main] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.30]
+2026-09-03T11:44:34.633+03:00  INFO 7330 --- [main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-09-03T11:44:34.634+03:00  INFO 7330 --- [main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1023 ms
+2026-09-03T11:44:34.823+03:00  INFO 7330 --- [main] o.hibernate.jpa.internal.util.LogHelper  : HHH000204: Processing PersistenceUnitInfo [name: default]
+2026-09-03T11:44:34.856+03:00  INFO 7330 --- [main] org.hibernate.Version                    : HHH000412: Hibernate ORM core version 6.5.3.Final
+2026-09-03T11:44:34.875+03:00  INFO 7330 --- [main] o.h.c.internal.RegionFactoryInitiator    : HHH000026: Second-level cache disabled
+2026-09-03T11:44:35.070+03:00  INFO 7330 --- [main] o.s.o.j.p.SpringPersistenceUnitInfo      : No LoadTimeWeaver setup: ignoring JPA class transformer
+2026-09-03T11:44:35.089+03:00  INFO 7330 --- [main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-09-03T11:44:35.315+03:00  INFO 7330 --- [main] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Added connection oracle.jdbc.driver.T4CConnection@fabef2e
+2026-09-03T11:44:35.316+03:00  INFO 7330 --- [main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-09-03T11:44:36.426+03:00  INFO 7330 --- [main] o.h.e.t.j.p.i.JtaPlatformInitiator       : HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+2026-09-03T11:44:37.131+03:00  WARN 7330 --- [main] o.h.t.s.i.ExceptionHandlerLoggedImpl     : GenerationTarget encountered exception accepting command : Error executing DDL "alter table if exists project_members add constraint FKn7yb7o7t7emrqwyqho4hbo0qh foreign key (user_id) references mobile_app_users" via JDBC [ORA-02298: doğrulanamıyor (TESTPILOTAPP.FKN7YB7O7T7EMRQWYQHO4HBO0QH) - üst anahtarlar bulunamadı
+]
+
+org.hibernate.tool.schema.spi.CommandAcceptanceException: Error executing DDL "alter table if exists project_members add constraint FKn7yb7o7t7emrqwyqho4hbo0qh foreign key (user_id) references mobile_app_users" via JDBC [ORA-02298: doğrulanamıyor (TESTPILOTAPP.FKN7YB7O7T7EMRQWYQHO4HBO0QH) - üst anahtarlar bulunamadı
+]
+	at org.hibernate.tool.schema.internal.exec.GenerationTargetToDatabase.accept(GenerationTargetToDatabase.java:94) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.internal.AbstractSchemaMigrator.applySqlString(AbstractSchemaMigrator.java:583) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.internal.AbstractSchemaMigrator.applySqlStrings(AbstractSchemaMigrator.java:523) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.internal.AbstractSchemaMigrator.applyForeignKeys(AbstractSchemaMigrator.java:455) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.internal.AbstractSchemaMigrator.performMigration(AbstractSchemaMigrator.java:276) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.internal.AbstractSchemaMigrator.doMigration(AbstractSchemaMigrator.java:119) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.spi.SchemaManagementToolCoordinator.performDatabaseAction(SchemaManagementToolCoordinator.java:280) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.spi.SchemaManagementToolCoordinator.lambda$process$5(SchemaManagementToolCoordinator.java:144) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at java.base/java.util.HashMap.forEach(HashMap.java:1430) ~[na:na]
+	at org.hibernate.tool.schema.spi.SchemaManagementToolCoordinator.process(SchemaManagementToolCoordinator.java:141) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.boot.internal.SessionFactoryObserverForSchemaExport.sessionFactoryCreated(SessionFactoryObserverForSchemaExport.java:37) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.internal.SessionFactoryObserverChain.sessionFactoryCreated(SessionFactoryObserverChain.java:35) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.internal.SessionFactoryImpl.<init>(SessionFactoryImpl.java:322) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.boot.internal.SessionFactoryBuilderImpl.build(SessionFactoryBuilderImpl.java:457) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.jpa.boot.internal.EntityManagerFactoryBuilderImpl.build(EntityManagerFactoryBuilderImpl.java:1506) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.springframework.orm.jpa.vendor.SpringHibernateJpaPersistenceProvider.createContainerEntityManagerFactory(SpringHibernateJpaPersistenceProvider.java:75) ~[spring-orm-6.1.13.jar:6.1.13]
+	at org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean.createNativeEntityManagerFactory(LocalContainerEntityManagerFactoryBean.java:390) ~[spring-orm-6.1.13.jar:6.1.13]
+	at org.springframework.orm.jpa.AbstractEntityManagerFactoryBean.buildNativeEntityManagerFactory(AbstractEntityManagerFactoryBean.java:409) ~[spring-orm-6.1.13.jar:6.1.13]
+	at org.springframework.orm.jpa.AbstractEntityManagerFactoryBean.afterPropertiesSet(AbstractEntityManagerFactoryBean.java:396) ~[spring-orm-6.1.13.jar:6.1.13]
+	at org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean.afterPropertiesSet(LocalContainerEntityManagerFactoryBean.java:366) ~[spring-orm-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.invokeInitMethods(AbstractAutowireCapableBeanFactory.java:1853) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.initializeBean(AbstractAutowireCapableBeanFactory.java:1802) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.doCreateBean(AbstractAutowireCapableBeanFactory.java:600) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBean(AbstractAutowireCapableBeanFactory.java:522) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.lambda$doGetBean$0(AbstractBeanFactory.java:337) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton(DefaultSingletonBeanRegistry.java:234) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.doGetBean(AbstractBeanFactory.java:335) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.getBean(AbstractBeanFactory.java:205) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.context.support.AbstractApplicationContext.finishBeanFactoryInitialization(AbstractApplicationContext.java:954) ~[spring-context-6.1.13.jar:6.1.13]
+	at org.springframework.context.support.AbstractApplicationContext.refresh(AbstractApplicationContext.java:625) ~[spring-context-6.1.13.jar:6.1.13]
+	at org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext.refresh(ServletWebServerApplicationContext.java:146) ~[spring-boot-3.3.4.jar:3.3.4]
+	at org.springframework.boot.SpringApplication.refresh(SpringApplication.java:754) ~[spring-boot-3.3.4.jar:3.3.4]
+	at org.springframework.boot.SpringApplication.refreshContext(SpringApplication.java:456) ~[spring-boot-3.3.4.jar:3.3.4]
+	at org.springframework.boot.SpringApplication.run(SpringApplication.java:335) ~[spring-boot-3.3.4.jar:3.3.4]
+	at org.springframework.boot.SpringApplication.run(SpringApplication.java:1363) ~[spring-boot-3.3.4.jar:3.3.4]
+	at org.springframework.boot.SpringApplication.run(SpringApplication.java:1352) ~[spring-boot-3.3.4.jar:3.3.4]
+	at com.testpilot.TestPilotApplication.main(TestPilotApplication.java:11) ~[classes/:na]
+Caused by: java.sql.SQLIntegrityConstraintViolationException: ORA-02298: doğrulanamıyor (TESTPILOTAPP.FKN7YB7O7T7EMRQWYQHO4HBO0QH) - üst anahtarlar bulunamadı
+
+	at oracle.jdbc.driver.T4CTTIoer11.processError(T4CTTIoer11.java:629) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4CTTIoer11.processError(T4CTTIoer11.java:563) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4C8Oall.processError(T4C8Oall.java:1230) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4CTTIfun.receive(T4CTTIfun.java:771) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4CTTIfun.doRPC(T4CTTIfun.java:298) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4C8Oall.doOALL(T4C8Oall.java:511) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4CStatement.doOall8(T4CStatement.java:122) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4CStatement.executeForRows(T4CStatement.java:1199) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.OracleStatement.executeSQLStatement(OracleStatement.java:1819) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.OracleStatement.doExecuteWithTimeout(OracleStatement.java:1471) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.OracleStatement.executeInternal(OracleStatement.java:2504) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.OracleStatement.execute(OracleStatement.java:2459) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.OracleStatementWrapper.execute(OracleStatementWrapper.java:327) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at com.zaxxer.hikari.pool.ProxyStatement.execute(ProxyStatement.java:94) ~[HikariCP-5.1.0.jar:na]
+	at com.zaxxer.hikari.pool.HikariProxyStatement.execute(HikariProxyStatement.java) ~[HikariCP-5.1.0.jar:na]
+	at org.hibernate.tool.schema.internal.exec.GenerationTargetToDatabase.accept(GenerationTargetToDatabase.java:80) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	... 36 common frames omitted
+Caused by: oracle.jdbc.OracleDatabaseException: ORA-02298: doğrulanamıyor (TESTPILOTAPP.FKN7YB7O7T7EMRQWYQHO4HBO0QH) - üst anahtarlar bulunamadı
+
+	at oracle.jdbc.driver.T4CTTIoer11.processError(T4CTTIoer11.java:636) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	... 51 common frames omitted
+
+2026-09-03T11:44:37.145+03:00  WARN 7330 --- [main] o.h.t.s.i.ExceptionHandlerLoggedImpl     : GenerationTarget encountered exception accepting command : Error executing DDL "alter table if exists project_members add constraint FKrfjjg386p841b0qakx2iib1c5 foreign key (project_id) references mobile_projects" via JDBC [ORA-02298: doğrulanamıyor (TESTPILOTAPP.FKRFJJG386P841B0QAKX2IIB1C5) - üst anahtarlar bulunamadı
+]
+
+org.hibernate.tool.schema.spi.CommandAcceptanceException: Error executing DDL "alter table if exists project_members add constraint FKrfjjg386p841b0qakx2iib1c5 foreign key (project_id) references mobile_projects" via JDBC [ORA-02298: doğrulanamıyor (TESTPILOTAPP.FKRFJJG386P841B0QAKX2IIB1C5) - üst anahtarlar bulunamadı
+]
+	at org.hibernate.tool.schema.internal.exec.GenerationTargetToDatabase.accept(GenerationTargetToDatabase.java:94) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.internal.AbstractSchemaMigrator.applySqlString(AbstractSchemaMigrator.java:583) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.internal.AbstractSchemaMigrator.applySqlStrings(AbstractSchemaMigrator.java:523) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.internal.AbstractSchemaMigrator.applyForeignKeys(AbstractSchemaMigrator.java:455) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.internal.AbstractSchemaMigrator.performMigration(AbstractSchemaMigrator.java:276) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.internal.AbstractSchemaMigrator.doMigration(AbstractSchemaMigrator.java:119) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.spi.SchemaManagementToolCoordinator.performDatabaseAction(SchemaManagementToolCoordinator.java:280) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.tool.schema.spi.SchemaManagementToolCoordinator.lambda$process$5(SchemaManagementToolCoordinator.java:144) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at java.base/java.util.HashMap.forEach(HashMap.java:1430) ~[na:na]
+	at org.hibernate.tool.schema.spi.SchemaManagementToolCoordinator.process(SchemaManagementToolCoordinator.java:141) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.boot.internal.SessionFactoryObserverForSchemaExport.sessionFactoryCreated(SessionFactoryObserverForSchemaExport.java:37) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.internal.SessionFactoryObserverChain.sessionFactoryCreated(SessionFactoryObserverChain.java:35) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.internal.SessionFactoryImpl.<init>(SessionFactoryImpl.java:322) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.boot.internal.SessionFactoryBuilderImpl.build(SessionFactoryBuilderImpl.java:457) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.hibernate.jpa.boot.internal.EntityManagerFactoryBuilderImpl.build(EntityManagerFactoryBuilderImpl.java:1506) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	at org.springframework.orm.jpa.vendor.SpringHibernateJpaPersistenceProvider.createContainerEntityManagerFactory(SpringHibernateJpaPersistenceProvider.java:75) ~[spring-orm-6.1.13.jar:6.1.13]
+	at org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean.createNativeEntityManagerFactory(LocalContainerEntityManagerFactoryBean.java:390) ~[spring-orm-6.1.13.jar:6.1.13]
+	at org.springframework.orm.jpa.AbstractEntityManagerFactoryBean.buildNativeEntityManagerFactory(AbstractEntityManagerFactoryBean.java:409) ~[spring-orm-6.1.13.jar:6.1.13]
+	at org.springframework.orm.jpa.AbstractEntityManagerFactoryBean.afterPropertiesSet(AbstractEntityManagerFactoryBean.java:396) ~[spring-orm-6.1.13.jar:6.1.13]
+	at org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean.afterPropertiesSet(LocalContainerEntityManagerFactoryBean.java:366) ~[spring-orm-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.invokeInitMethods(AbstractAutowireCapableBeanFactory.java:1853) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.initializeBean(AbstractAutowireCapableBeanFactory.java:1802) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.doCreateBean(AbstractAutowireCapableBeanFactory.java:600) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBean(AbstractAutowireCapableBeanFactory.java:522) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.lambda$doGetBean$0(AbstractBeanFactory.java:337) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.DefaultSingletonBeanRegistry.getSingleton(DefaultSingletonBeanRegistry.java:234) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.doGetBean(AbstractBeanFactory.java:335) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.beans.factory.support.AbstractBeanFactory.getBean(AbstractBeanFactory.java:205) ~[spring-beans-6.1.13.jar:6.1.13]
+	at org.springframework.context.support.AbstractApplicationContext.finishBeanFactoryInitialization(AbstractApplicationContext.java:954) ~[spring-context-6.1.13.jar:6.1.13]
+	at org.springframework.context.support.AbstractApplicationContext.refresh(AbstractApplicationContext.java:625) ~[spring-context-6.1.13.jar:6.1.13]
+	at org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext.refresh(ServletWebServerApplicationContext.java:146) ~[spring-boot-3.3.4.jar:3.3.4]
+	at org.springframework.boot.SpringApplication.refresh(SpringApplication.java:754) ~[spring-boot-3.3.4.jar:3.3.4]
+	at org.springframework.boot.SpringApplication.refreshContext(SpringApplication.java:456) ~[spring-boot-3.3.4.jar:3.3.4]
+	at org.springframework.boot.SpringApplication.run(SpringApplication.java:335) ~[spring-boot-3.3.4.jar:3.3.4]
+	at org.springframework.boot.SpringApplication.run(SpringApplication.java:1363) ~[spring-boot-3.3.4.jar:3.3.4]
+	at org.springframework.boot.SpringApplication.run(SpringApplication.java:1352) ~[spring-boot-3.3.4.jar:3.3.4]
+	at com.testpilot.TestPilotApplication.main(TestPilotApplication.java:11) ~[classes/:na]
+Caused by: java.sql.SQLIntegrityConstraintViolationException: ORA-02298: doğrulanamıyor (TESTPILOTAPP.FKRFJJG386P841B0QAKX2IIB1C5) - üst anahtarlar bulunamadı
+
+	at oracle.jdbc.driver.T4CTTIoer11.processError(T4CTTIoer11.java:629) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4CTTIoer11.processError(T4CTTIoer11.java:563) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4C8Oall.processError(T4C8Oall.java:1230) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4CTTIfun.receive(T4CTTIfun.java:771) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4CTTIfun.doRPC(T4CTTIfun.java:298) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4C8Oall.doOALL(T4C8Oall.java:511) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4CStatement.doOall8(T4CStatement.java:122) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.T4CStatement.executeForRows(T4CStatement.java:1199) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.OracleStatement.executeSQLStatement(OracleStatement.java:1819) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.OracleStatement.doExecuteWithTimeout(OracleStatement.java:1471) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.OracleStatement.executeInternal(OracleStatement.java:2504) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.OracleStatement.execute(OracleStatement.java:2459) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at oracle.jdbc.driver.OracleStatementWrapper.execute(OracleStatementWrapper.java:327) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	at com.zaxxer.hikari.pool.ProxyStatement.execute(ProxyStatement.java:94) ~[HikariCP-5.1.0.jar:na]
+	at com.zaxxer.hikari.pool.HikariProxyStatement.execute(HikariProxyStatement.java) ~[HikariCP-5.1.0.jar:na]
+	at org.hibernate.tool.schema.internal.exec.GenerationTargetToDatabase.accept(GenerationTargetToDatabase.java:80) ~[hibernate-core-6.5.3.Final.jar:6.5.3.Final]
+	... 36 common frames omitted
+Caused by: oracle.jdbc.OracleDatabaseException: ORA-02298: doğrulanamıyor (TESTPILOTAPP.FKRFJJG386P841B0QAKX2IIB1C5) - üst anahtarlar bulunamadı
+
+	at oracle.jdbc.driver.T4CTTIoer11.processError(T4CTTIoer11.java:636) ~[ojdbc11-21.9.0.0.jar:21.9.0.0.0]
+	... 51 common frames omitted
+
+2026-09-03T11:44:37.150+03:00  INFO 7330 --- [main] j.LocalContainerEntityManagerFactoryBean : Initialized JPA EntityManagerFactory for persistence unit 'default'
+2026-09-03T11:44:37.540+03:00  INFO 7330 --- [main] o.s.d.j.r.query.QueryEnhancerFactory     : Hibernate is in classpath; If applicable, HQL parser will be used.
+2026-09-03T11:44:39.037+03:00  INFO 7330 --- [main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 4000 (http) with context path '/'
+2026-09-03T11:44:39.044+03:00  INFO 7330 --- [main] com.testpilot.TestPilotApplication       : Started TestPilotApplication in 5.89 seconds (process running for 6.184)
+2026-09-03T11:44:43.076+03:00  INFO 7330 --- [http-nio-4000-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-09-03T11:44:43.076+03:00  INFO 7330 --- [http-nio-4000-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-09-03T11:44:43.077+03:00  INFO 7330 --- [http-nio-4000-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 1 ms
+2026-09-03T12:21:36.521+03:00  WARN 7330 --- [HikariPool-1 housekeeper] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Thread starvation or clock leap detected (housekeeper delta=15m27s998ms).
+2026-09-03T12:53:04.158+03:00  WARN 7330 --- [HikariPool-1 housekeeper] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Thread starvation or clock leap detected (housekeeper delta=15m27s286ms).
+2026-09-03T13:09:02.154+03:00  WARN 7330 --- [HikariPool-1 housekeeper] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Thread starvation or clock leap detected (housekeeper delta=15m27s983ms).
+2026-09-03T13:15:32.035+03:00  WARN 7330 --- [HikariPool-1 housekeeper] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Thread starvation or clock leap detected (housekeeper delta=3m59s848ms).
+2026-09-03T13:20:58.878+03:00  INFO 7330 --- [SpringApplicationShutdownHook] j.LocalContainerEntityManagerFactoryBean : Closing JPA EntityManagerFactory for persistence unit 'default'
+2026-09-03T13:20:58.888+03:00  INFO 7330 --- [SpringApplicationShutdownHook] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Shutdown initiated...
+2026-09-03T13:20:58.954+03:00  INFO 7330 --- [SpringApplicationShutdownHook] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Shutdown completed.

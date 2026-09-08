@@ -11,12 +11,13 @@ import com.testpilot.security.LdapAuthenticator;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 @RestController
 @RequestMapping("/settings/ldap")
 @CrossOrigin(origins = "*")
 public class LdapSettingsController {
-
+    private static final Logger log = LoggerFactory.getLogger(LdapSettingsController.class);
     private final LdapSettingsRepository repository;
     private final CredentialEncryptor credentialEncryptor;
     private final CurrentUserResolver currentUserResolver;
@@ -80,6 +81,7 @@ public class LdapSettingsController {
             try {
                 ldapAuthenticator.testConnection(candidate, managerPasswordPlaintext);
             } catch (LdapAuthException e) {
+                log.warn("LDAP ayarlari kaydedilemedi (baglanti testi basarisiz): {}", e.getMessage(), e);
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
             }
         }

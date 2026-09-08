@@ -2,8 +2,11 @@ package com.testpilot.scheduler;
 
 import com.testpilot.agent.RunStore;
 import com.testpilot.controller.RunController;
+import com.testpilot.model.AppSettings;
 import com.testpilot.model.Run;
 import com.testpilot.model.TestRequest;
+import com.testpilot.repository.AppSettingsRepository;
+import com.testpilot.settings.AppSettingsService;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.Trigger;
 import org.springframework.scheduling.support.PeriodicTrigger;
@@ -25,19 +28,37 @@ public class NightlySuiteScheduler {
 
     private final RunStore runStore;
     private final RunController runController;
+    private final AppSettingsService appSettingsService;
+    private final AppSettingsRepository appSettingsRepository;
     private final ThreadPoolTaskScheduler taskScheduler;
 
+    // Baslangic degeri (2:00) sadece appSettingsService.getOrCreate() henuz hic
+    // calismamissa (teorik olarak imkansiz, constructor'da hemen cagriliyor)
+    // kullanilan bir guvenlik agi -- gercek baslangic degeri asagida constructor
+    // icinde DB'den okunuyor.
     private final AtomicInteger hour = new AtomicInteger(2);
     private final AtomicInteger minute = new AtomicInteger(0);
     private volatile ScheduledFuture<?> scheduledFuture;
 
-    public NightlySuiteScheduler(RunStore runStore, RunController runController) {
+    public NightlySuiteScheduler(RunStore runStore, RunController runController,
+                                  AppSettingsService appSettingsService, AppSettingsRepository appSettingsRepository) {
         this.runStore = runStore;
         this.runController = runController;
+        this.appSettingsService = appSettingsService;
+        this.appSettingsRepository = appSettingsRepository;
         this.taskScheduler = new ThreadPoolTaskScheduler();
         this.taskScheduler.setPoolSize(1);
         this.taskScheduler.setThreadNamePrefix("nightly-scheduler-");
         this.taskScheduler.initialize();
+
+        // Gece koşumu saati artık kalıcı -- backend her yeniden başladığında
+        // sessizce 02:00'a dönmek yerine en son kaydedilen saati DB'den okuyor.
+        // Kolonlar NULL gelirse (ilk kurulum ya da bu değişiklikten önce
+        // oluşturulmuş eski satır) 02:00 varsayılanı kullanılır.
+        AppSettings settings = appSettingsService.getOrCreate();
+        if (settings.getNightlyHour() != null) hour.set(settings.getNightlyHour());
+        if (settings.getNightlyMinute() != null) minute.set(settings.getNightlyMinute());
+
         reschedule();
     }
 
@@ -50,6 +71,12 @@ public class NightlySuiteScheduler {
     public Map<String, Integer> setTime(@RequestBody Map<String, Integer> body) {
         if (body.get("hour") != null) hour.set(body.get("hour"));
         if (body.get("minute") != null) minute.set(body.get("minute"));
+
+        AppSettings settings = appSettingsService.getOrCreate();
+        settings.setNightlyHour(hour.get());
+        settings.setNightlyMinute(minute.get());
+        appSettingsRepository.save(settings);
+
         reschedule();
         return getTime();
     }

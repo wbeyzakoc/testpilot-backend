@@ -14,6 +14,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @RestController
 @RequestMapping("/auth")
@@ -21,6 +23,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class AuthController {
 
     private static final String BAD_CREDENTIALS = "Kullanıcı adı veya parola hatalı";
+    private static final Logger log = LoggerFactory.getLogger(AuthController.class);
 
     private final AppUserRepository userRepository;
     private final LdapSettingsRepository ldapSettingsRepository;
@@ -28,9 +31,9 @@ public class AuthController {
     private final LdapAuthenticator ldapAuthenticator;
 
     public AuthController(AppUserRepository userRepository,
-                           LdapSettingsRepository ldapSettingsRepository,
-                           PasswordEncoder passwordEncoder,
-                           LdapAuthenticator ldapAuthenticator) {
+                          LdapSettingsRepository ldapSettingsRepository,
+                          PasswordEncoder passwordEncoder,
+                          LdapAuthenticator ldapAuthenticator) {
         this.userRepository = userRepository;
         this.ldapSettingsRepository = ldapSettingsRepository;
         this.passwordEncoder = passwordEncoder;
@@ -73,20 +76,33 @@ public class AuthController {
             if (ldapAuthenticator.authenticate(settings, username, request.getPassword())) {
                 AppUser user = existing;
                 if (user == null) {
-                    // LDAP ile ilk girişte herkes USER rolüyle başlar (users.tsx'teki
-                    // açıklamayla tutarlı) — admin isterse sonra Admin yapabilir.
+                    String managerCn = extractCn(settings.getManagerDn());
+                    boolean isManagerAccount = managerCn != null && managerCn.equalsIgnoreCase(username);
+
                     user = new AppUser();
                     user.setUsername(username);
-                    user.setRole(UserRole.USER);
+                    user.setRole(isManagerAccount ? UserRole.ADMIN : UserRole.USER);
                     user.setSource(UserSource.LDAP);
                     userRepository.save(user);
                 }
                 return new LoginResponse(user.getUsername(), user.getRole());
             }
         } catch (LdapAuthException e) {
+            log.warn("LDAP login basarisiz - username={}: {}", username, e.getMessage(), e);
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, e.getMessage());
         }
 
         throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, BAD_CREDENTIALS);
+    }
+
+    // "CN=sh10799,OU=ServisHesaplari,DC=vakifbank,DC=intra" -> "sh10799"
+    private static String extractCn(String dn) {
+        if (dn == null || dn.isBlank()) return null;
+        String firstComponent = dn.split(",")[0].trim();
+        int eq = firstComponent.indexOf('=');
+        if (eq < 0) return null;
+        String attr = firstComponent.substring(0, eq).trim();
+        if (!attr.equalsIgnoreCase("cn")) return null;
+        return firstComponent.substring(eq + 1).trim();
     }
 }

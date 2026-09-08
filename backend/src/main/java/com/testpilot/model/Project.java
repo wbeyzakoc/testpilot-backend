@@ -30,7 +30,7 @@ public class Project {
 
     @ManyToMany
     @JoinTable(
-            name = "project_members",
+            name = "mobile_project_members",
             joinColumns = @JoinColumn(name = "project_id"),
             inverseJoinColumns = @JoinColumn(name = "user_id")
     )
