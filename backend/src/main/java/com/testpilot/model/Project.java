@@ -28,6 +28,12 @@ public class Project {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    // null = sinirsiz (proje icin paralel kosum sayisi ayarlanmamis). Set ise,
+    // suites.tsx'teki "Bu Suite'i Calistir" bu projede ayni anda en fazla bu
+    // kadar testi calistirir, geri kalanlar otomatik kuyruga alinir.
+    @Column(name = "max_parallel_runs")
+    private Integer maxParallelRuns;
+
     @ManyToMany
     @JoinTable(
             name = "mobile_project_members",
@@ -49,6 +55,8 @@ public class Project {
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public Integer getMaxParallelRuns() { return maxParallelRuns; }
+    public void setMaxParallelRuns(Integer maxParallelRuns) { this.maxParallelRuns = maxParallelRuns; }
     public Set<AppUser> getMembers() { return members; }
     public void setMembers(Set<AppUser> members) { this.members = members; }
 }

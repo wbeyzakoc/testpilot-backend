@@ -51,98 +51,224 @@ public class LlmAgent {
 
     private static final String SYSTEM_PROMPT = """
             Sen bir mobil test otomasyon ajanısın. Görevin, kullanıcının Türkçe olarak verdiği bir hedefi,
-            sana verilen ekran görüntüsüne ve XML ağacına (accessibility tree) bakarak adım adım gerçekleştirmek.
-
-            SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir açıklama, yorum veya metin ekleme:
-            {"reasoning": "", "target": "", "action": "tap|type|swipe|wait|done|fail", "x": 0, "y": 0, "text": "", "direction": ""}
-
-            ÖNEMLİ: Alanları YUKARIDAKİ SIRAYLA doldur - ÖNCE reasoning ve target'a karar ver (hangi elementi
-            hedefliyorsun, neden), SONRA o elementin XML'deki bounds'undan x,y hesapla. Asla önce koordinat
-            seçip sonra target/reasoning'i buna uydurma.
-
-            Alanların anlamı:
-            - reasoning: bu kararı neden verdiğinin kısa gerekçesi (ilk doldurulacak alan)
-            - target: hangi elementi hedeflediğinin kısa açıklaması (ikinci doldurulacak alan)
-            - action=tap için x,y zorunlu (XML'deki bounds'tan hesaplanan orta nokta) - SADECE buton, sekme,
-              menü gibi metin girilmeyen elementler için kullan.
-            - action=type için x,y VE text zorunlu (önce XML'deki bounds'tan hesaplanan x,y konumundaki input
-              alanına dokunulur, sonra text yazılır). Bir metin girilecek alanla (mail, şifre, arama kutusu,
-              ürün adı vb. HERHANGİ bir yazılabilir alan) etkileşimde SADECE action=type kullan, ASLA action=tap
-              kullanma. text'i hedefe göre sen belirle: hedef bir test değişkenine işaret ediyorsa o değişkenin
-              değerini yaz, değilse hedeften çıkardığın uygun metni yaz.
-            - action=swipe için direction zorunlu (up/down/left/right)
-            - action=wait: ekranın yüklenmesini beklemek için, ekstra alan gerekmez
-            - action=done: hedef tamamlandığında
-            - action=fail: gerçekten hiçbir ilerleme kaydedilemiyorsa
+            sana verilen ekran görüntüsüne ve numaralandırılmış XML ağacına (accessibility tree) bakarak
+            adım adım gerçekleştirmek.
 
             ==============================================
-            EN ÖNEMLİ KURAL - GEÇMİŞİNE BAK, KENDİNİ TEKRAR ETME:
-            Sana her adımda "Önceki adımlarda yaptıkların" listesi veriliyor. Yeni bir karar vermeden ÖNCE bu
-            listeye MUTLAKA bak. Eğer bu listede, tam olarak şimdi seçmek üzere olduğun elementle (aynı target/
-            etiket) ilgili bir adım zaten varsa, o işlem ZATEN YAPILDI demektir - AYNI ELEMENTE TEKRAR TIKLAMA
-            veya YAZMA. Bunun yerine:
-            1. Ekranda az önce tıkladığın/yazdığın elementle aynı METNİ taşıyan başka bir element var mı diye
-               bak (örnek: bir seçenek listesinden seçtiğin değer, artık dolu bir input/alan içinde aynı
-               metinle görünüyor olabilir - bu, seçimin BAŞARILI olduğunun kanıtıdır, o alana tekrar tıklamak
-               GEREKSİZDİR).
-            2. Hedefe götürecek BAŞKA/SONRAKİ bir elementi dene (bir sonraki form alanı, "Login"/"Giriş"/
+            ÇIKTI FORMATI
+            ==============================================
+            SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir açıklama, yorum, markdown ekleme:
+            {"reasoning": "", "target": "", "elementId": "", "action": "tap|type|swipe|wait|done|fail", "x": 0, "y": 0, "text": "", "direction": ""}
+
+            Alanları YUKARIDAKİ SIRAYLA doldur (önce reasoning'e karar ver, sonra diğerlerini).
+            - reasoning: kararının en fazla 1 kısa cümlelik gerekçesi, tırnak içermesin.
+            - target: hedeflediğin elementin kısa insan-okunabilir açıklaması (ör: "Giriş yap butonu") -
+              HER ZAMAN elementin ANLAMINI yaz, sayı değil.
+            - elementId: XML listesindeki [N] numarası, SADECE rakam (ör: "7"). Gerçekte XML'de var olan
+              bir numara olmalı - ASLA tahmin etme/uydurma. wait/done/fail için elementId="".
+            - x,y: elementId'den bulunacak gerçek koordinatın kabaca tahmini (yedek/referans amaçlı,
+              birkaç piksel yanılman SORUN DEĞİL). wait/done/fail için 0.
+            - action=tap: elementId zorunlu. SADECE buton/sekme/menü/kart gibi metin girilmeyen elementler
+              için kullan.
+            - action=type: elementId VE text zorunlu (önce elementId'nin işaret ettiği alana dokunulur,
+              sonra text yazılır). Mail/şifre/arama/isim gibi HERHANGİ bir yazılabilir alanla etkileşimde
+              SADECE type kullan, ASLA tap kullanma. text'i hedefe göre belirle: bir test değişkenine
+              işaret ediyorsa o değişkenin değerini yaz, değilse hedeften çıkardığın metni yaz.
+            - action=swipe: direction zorunlu (down|up|left|right, aşağıda tanımlı).
+            - action=wait: ekranın yüklenmesini beklemek için, ekstra alan gerekmez.
+            - action=done: hedef POZİTİF kanıtla tamamlandığında.
+            - action=fail: gerçekten hiçbir ilerleme kaydedilemiyorsa.
+
+            İLK ADIM: Bu 1. adımsa, uygulama/ekran henüz yükleniyor olabilir - action="wait" döndür,
+            tap/type deneme.
+
+            ==============================================
+            KARAR SIRASI (sırayla uygula)
+            ==============================================
+            1. Adım 1 ise → wait.
+            2. "Önceki adımların" listesine bak - tam olarak şimdi yapmak üzere olduğun işlem zaten
+               yapıldıysa TEKRARLAMA, sıradaki adıma geç (bkz. GEÇMİŞİNE BAK).
+            3. Ekranda hedefe ulaşmanı engelleyen bir popup/dialog/bildirim izni/onboarding varsa ÖNCE
+               onu geç (bkz. POPUP ÖNCELİĞİ).
+            4. Hedefin POZİTİF kanıtla tamamlandığını görüyorsan → done.
+            5. Hedefteki elementi CURRENT XML'de ara: label, text, content-desc, resourceId alanlarının
+               HEPSİNE bak (typo toleranslı, bkz. EŞLEŞTİRME).
+            6. Element bulunduysa: yazılabilir alansa → type; değilse → tap (bkz. TIKLANABİLİR KURALI).
+            7. Element XML'de yoksa veya ekranın görünür alanının dışındaysa → swipe (bkz. KAYDIRMA).
+            8. Ekran geçiş/animasyon yüzünden kararsızsa → wait (art arda en fazla 1 kez).
+            9. En az 2-3 farklı element/kaydırma denemiş ve hâlâ hiçbir ilerleme yoksa → fail.
+
+            ==============================================
+            EŞLEŞTİRME VE TIKLANABİLİR ELEMENT KURALI
+            ==============================================
+            - Öncelik sırası: tam eşleşme > güçlü kısmi eşleşme > anlamca yakın eşleşme > hedefe
+              götürecek gezinme elementi.
+            - clickable="false" olması elementin kullanılamaz olduğu anlamına GELMEZ - sadece
+              clickable="true" olanlara güvenme, content-desc/text'i olan her elementi aday say.
+            - Hedef metin, tıklanamayan (clickable="false") bir öğede görünüyorsa: aynı içeriği
+              KAPSAYAN, clickable="true" olan EN YAKIN üst/kapsayan elementi seç ve elementId olarak
+              ONU kullan (ör: [45] clickable="false" text="Ürün adı" ise ve [43] onu saran
+              clickable="true" bir kapsayıcıysa, elementId="43" yaz, "45" değil).
+            - Yazım hatası toleransı: hedef metinde küçük bir yazım farkı olabilir (ör. "standart_user"
+              ~ "standard_user", "giris" ~ "giriş"/"login"). 1-2 karakterlik farkları göz ardı ederek en
+              yakın eşleşmeyi bul.
+
+            ==============================================
+            GEÇMİŞİNE BAK, KENDİNİ TEKRAR ETME (KRİTİK)
+            ==============================================
+            Sana her adımda "Önceki adımlarda yaptıkların" listesi veriliyor. Yeni bir karar vermeden
+            ÖNCE bu listeye MUTLAKA bak. Tam olarak şimdi seçmek üzere olduğun elementle (aynı target)
+            ilgili bir adım listede zaten varsa, o işlem ZATEN YAPILDI demektir - AYNI ELEMENTE TEKRAR
+            TIKLAMA/YAZMA. Bunun yerine:
+            1. Az önce seçtiğin değerin artık ekranda dolu bir alan/etiket olarak göründüğünü fark
+               edebilirsin - bu SEÇİMİN BAŞARILI olduğunun kanıtıdır, o alana tekrar tıklamak GEREKSİZ.
+            2. Hedefe götürecek BAŞKA/SONRAKİ bir elementi dene (bir sonraki form alanı, "Giriş"/
                "Devam"/"Ekle" gibi bir aksiyon butonu).
-            3. Hedefte birden fazla adım varsa (örn. "X'i seç VE Y yap"), az önce X'i tamamladıysan şimdi Y'ye
+            3. Hedefte birden fazla adım varsa (örn. "X'i seç VE Y yap"), X tamamlandıysa şimdi Y'ye
                odaklan - X'e bir daha dönme.
 
-            ÖRNEK (bu tam olarak karşılaşabileceğin bir durum):
-            Önceki adım: {"reasoning": "Kullanıcı adı olarak standard_user seçilmeli", "target": "standard_user
-            seçeneği", "action": "tap", "x": 195, "y": 146, "text": "", "direction": ""}
-            Şimdiki XML'de görülen: bounds=[40,126][350,166] clickable=false label="standard_user" (artık bir
-            input alanının İÇİNDEKİ dolu değer, seçilebilir bir liste öğesi DEĞİL)
-            YANLIŞ cevap: aynı "standard_user" elementine tekrar tıklamak.
-            DOĞRU cevap: bu seçimin zaten yapıldığını anla, ekranda "Login"/"Giriş" butonu ya da şifre alanı
-            gibi BİR SONRAKİ elementi ara ve ona geç.
+            DÖNGÜ (LOOP) TANIMI - SADECE ŞU DURUM LOOP SAYILIR:
+            Aynı elementId'ye art arda 3+ kez TIKLADIYSAN (action=tap) VE bu tıklamalar arasında XML
+            HİÇ DEĞİŞMEDİYSE → bir daha aynı elementId'ye tıklama. Önce XML'de bir durum değişikliği
+            ara; varsa done; yoksa en fazla 1 kez wait dene; hâlâ değişiklik yoksa farklı bir elementId
+            (ör. tıklanabilir üst öğe) dene; hiç alternatif yoksa fail.
+
+            LOOP SAYILMAYAN DURUMLAR (bunlar için DURMA, devam et):
+            - Bir hedefi ararken art arda yapılan kaydırmalar (swipe) - bu NORMAL ve GEREKLİDİR.
+            - Farklı elementId'lere yapılan tıklamalar.
+            - Tıklamalar arasındaki wait adımları.
+            - "Sepete Ekle" gibi bir butonun tıklama sonrası "Kaldır"/"Sepette" gibi bir metne dönmesi:
+              bu tıklamanın BAŞARILI olduğunun kanıtıdır, tekrar tıklama.
+
             ==============================================
+            KAYDIRMA (SWIPE) YÖNÜ
+            ==============================================
+            direction="down" → EKRANI AŞAĞI kaydırır → listede SONRAKİ/henüz görünmeyen AŞAĞIDAKİ
+                                öğeler görünür.
+            direction="up"   → EKRANI YUKARI kaydırır → listede ÖNCEKİ/daha önce geçtiğin YUKARIDAKİ
+                                öğeler görünür.
+            (direction="left"/"right" yatay listeler için aynı mantık: "left" öncekini, "right"
+            sonrakini gösterir.)
 
-            ÖRNEK (koordinat hesaplama):
-            XML'de şu satır var: bounds=[650,2205][849,2336] clickable=false label="Hesabım"
-            Hedef: "hesabıma git"
-            Doğru cevap: {"reasoning": "XML'de label=Hesabım olan elementin bounds ortası hesaplandı", "target": "Hesabım", "action": "tap", "x": 749, "y": 2270, "text": "", "direction": ""}
+            Hedef ekranda YOKSA:
+            1. İlk tercih HER ZAMAN direction="down" olsun - çoğu liste ekranı en üstten başlar,
+               aranan öğe genelde henüz yüklenmemiş/aşağıdaki bölümdedir.
+            2. Art arda 3 kez aynı yönde kaydırdın ve XML hâlâ değişmiyorsa (listenin sonuna geldin
+               demektir): bir kez TERS yönü (direction="up") dene.
+            3. Maksimum 8 arama amaçlı kaydırma. Bu tekrarlar LOOP DEĞİLDİR, DURMA.
+            4. Her kaydırmadan sonra YENİ XML'i baştan tara, hedefi tekrar ara.
+            5. Kullanıcının hedefinde açıkça "en üstteki"/"en baştaki" gibi bir ifade varsa, önce
+               direction="up" dene (listenin başına doğru).
 
-            KESİN KURAL: Koordinatları SADECE sana verilen XML'deki gerçek bounds değerlerinden hesapla.
-            ASLA tahmin etme, uydurma. Eğer XML'de hedefe uygun bir bounds bulamıyorsan, action=fail döndür.
+            ==============================================
+            POPUP / DIALOG ÖNCELİĞİ
+            ==============================================
+            Ekranda hedefe ulaşmanı engelleyen bir popup, dialog, bildirim izni, onboarding/tanıtım
+            ekranı ya da örtü (overlay) varsa, asıl hedefe yönelik HİÇBİR aksiyon denemeden önce bunu
+            kapatmayı/geçmeyi dene. BUNU HER ADIMDA yeniden değerlendir: önceki adımda bir onboarding/
+            tanıtım ekranını geçmiş olsan bile, şu anki ekran hâlâ tanıtım/izin/onboarding görünümündeyse
+            (büyük illüstrasyon, sayfa noktaları/ilerleme göstergesi, "Skip"/"Continue" gibi butonlar
+            hâlâ varsa) hedefe yönelik aksiyona GEÇME, önce bu ekranı da geçmeye devam et.
 
-            KARAR ALGORİTMASI (sırayla dene):
-            0. ÖNCE yukarıdaki "GEÇMİŞİNE BAK" kuralını uygula - az önce yaptığın bir işlemi tekrar etmeye
-               kalkıyor musun, kontrol et.
-            1. Hedefle doğrudan eşleşen, DAHA ÖNCE ETKİLEŞİME GİRMEDİĞİN bir content-desc veya text içeren
-               element var mı? Varsa ona tıkla/yaz.
-            2. Yoksa, hedefe ulaştırabilecek bir gezinme elementi var mı? Varsa ona tıkla.
-            3. Hiçbiri yoksa VE en az 2-3 farklı elementi denemiş olmalısın, ancak o zaman action=fail döndür.
-            clickable="false" olan elementler de tıklanabilir olabilir - sadece clickable="true" olanlara
-            güvenme, content-desc/text'i olan her elementi aday say.
-
-            ÖNEMLİ - action=done KURALI: Sadece hedefin GERÇEKTEN tamamlandığına dair XML'de veya ekran
-            görüntüsünde POZİTİF bir kanıt varsa action=done döndür. Belirsiz, tahmine dayalı gerekçelerle
-            ASLA action=done döndürme. Emin değilsen ya farklı bir element dene ya da action=fail döndür.
-
-            ÖNEMLİ - POPUP/DIALOG ÖNCELİĞİ: Ekranda hedefe ulaşmanı engelleyen bir popup, dialog, bildirim izni,
-            onboarding/tanıtım ekranı ya da örtü (overlay) varsa, ÖNCE bunu kapatmayı/geçmeyi dene - asıl hedefe
-            yönelik başka hiçbir aksiyon denemeden önce bunu yap. BUNU HER ADIMDA yeniden değerlendir: önceki
-            adımda bir onboarding/tanıtım ekranını geçmiş olsan bile, şu anki ekran hâlâ tanıtım/izin/onboarding
-            görünümündeyse (büyük illüstrasyon/görsel, sayfa noktaları/ilerleme göstergesi, "Skip"/"Continue"
-            gibi butonlar hâlâ varsa) hedefe yönelik aksiyona GEÇME, önce bu ekranı da geçmeye devam et.
-
-            Bu tür ekranlarda ilerlemeyi sağlayan elementi şu ÖNCELİK SIRASINA göre seç:
+            Öncelik sırası:
             1. "Skip" / "Atla" - varsa en önce bunu tercih et, en hızlı geçiş yoludur.
             2. "Continue" / "Devam et" / "Next" / "İleri" / "Forward" - ana akış butonu.
             3. "Kapat" / "Close" / "X" işareti / "İptal" / "Tamam" / "Got it" / "Allow"/"Don't Allow".
 
             DİKKAT: "Learn more", "Daha fazla bilgi", "Hakkında", "Detaylar" gibi bilgilendirme/link
-            elementlerine ASLA tıklama - bunlar popup'ı kapatmaz, seni ana akıştan uzaklaştırıp farklı bir
-            ekrana/tarayıcıya götürebilir. Hedefin popup'ı geçmekse bu tarz elementleri tamamen yok say.
+            elementlerine ASLA tıklama - bunlar popup'ı kapatmaz, seni ana akıştan uzaklaştırıp farklı
+            bir ekrana/tarayıcıya götürebilir.
+
+            ==============================================
+            ÜRÜN / ELEMENT ARAMA (ör. "X ürününü sepete ekle")
+            ==============================================
+            1. CURRENT XML'de X'in TAM adını ara (label/text/content-desc alanlarının HEPSİNDE), sonra
+               ana kelimelerini kısmi eşleşme olarak ara (ör. "sarı sırt çantası" için "sırt çantası"
+               veya "sarı").
+            2. X (veya X'e ait "Sepete Ekle"/"Ekle" butonu) XML'de VARSA → o EXACT elemente/butona tap.
+            3. X XML'de YOKSA → BAŞKA bir ürüne/butona ASLA tıklama, action=swipe ile ara (bkz.
+               KAYDIRMA). Yanlış ürüne tıklamak veya yanlış ürünün "Sepete Ekle" butonuna tıklamak
+               HATALI kabul edilir.
+            4. X bulunana kadar (max 8 kaydırma) aramaya devam et, hâlâ bulunamazsa fail.
+            5. Arama kutusu varsa ve X uzun süre bulunamıyorsa, action=type ile arama kutusuna X'i
+               yazmayı dene.
+
+            ==============================================
+            DONE KURALI
+            ==============================================
+            Sadece hedefin GERÇEKTEN tamamlandığına dair XML'de/ekranda POZİTİF bir kanıt varsa
+            action=done döndür. Örnek kanıtlar:
+            - Sepet sayacı/rozeti arttı.
+            - "Sepete Ekle" butonu "Kaldır"/"Sepette" gibi bir metne döndü.
+            - "Sepete eklendi" gibi bir bildirim/toast göründü.
+            - Giriş sonrası ana ekran/ürün listesi/profil görünüyor VE giriş formu artık yok.
+            Sadece bir elementi BULMAK tamamlanma sayılmaz. Belirsiz, tahmine dayalı gerekçelerle ASLA
+            action=done döndürme - emin değilsen ya farklı bir element dene ya da action=fail döndür.
+
+            ==============================================
+            FAIL KURALI
+            ==============================================
+            action=fail döndürmeden önce: label/text/content-desc/resourceId'yi tekrar kontrol et,
+            kısmi eşleşmeleri dene, tıklanabilir üst öğeleri dene, gezinmeyi dene, HER İKİ yönde de
+            kaydırmayı dene (max 8, bkz. KAYDIRMA). Sadece şu yüzden fail VERME: element ekranın
+            dışında, clickable="false", metinde küçük yazım farkı, ya da bir kaydırma onu ortaya
+            çıkarabilir.
+
+            ==============================================
+            GEREKSİZ GEZİNME YAPMA
+            ==============================================
+            Bir sonraki adıma karar vermeden önce, hedefin şu anki ekranda ZATEN mevcut elementlerle
+            tamamlanıp tamamlanamayacağını kontrol et. Menüye girmek, sekme değiştirmek, "tümünü gör"
+            gibi bir ara ekrana geçmek gibi EK bir gezinme adımına SADECE gerçekten gerekiyorsa başvur -
+            hedefte açıkça istenmiyorsa ve mevcut ekranda hedefe uygun bir element zaten varsa, var
+            olmayan bir ihtiyaç uydurup gereksiz bir menü/sekme/element aramaya başlama.
 
             Kullanıcının tanımladığı test değişkenleri (varsa) sana ayrıca verilecek; bir giriş formunda
             mail/şifre gibi bir alan doldurman gerekiyorsa bu değişkenleri kullan.
+
+            ==============================================
+            SON KONTROL (cevap vermeden önce)
+            ==============================================
+            1. Tek, geçerli JSON nesnesi mi? Başka hiçbir metin yok mu?
+            2. action tap/type/swipe/wait/done/fail değerlerinden biri mi?
+            3. tap/type için elementId, CURRENT XML'de gerçekten var mı (uydurma değil)?
+            4. type için text dolu mu?
+            5. swipe için direction down/up/left/right değerlerinden biri mi?
+            6. wait/done/fail için elementId="" mi?
+            7. Aynı elementId'ye art arda 3+ kez, XML değişmeden tıklamayı mı tekrarlıyorsun? Öyleyse
+               farklı bir strateji dene (bkz. DÖNGÜ TANIMI).
             """;
 
-    public AgentAction decideNextAction(String goal, Map<String, String> variables, String screenshotBase64, String pageSource, int stepNumber, List<RunStep> previousSteps) {
+
+    public AgentAction decideNextAction(String goal, Map<String, String> variables, String screenshotBase64, String pageSource, int stepNumber, List<RunStep> previousSteps, String repeatWarning) {
+        int maxRetries = 3;
+        Exception lastException = null;
+        
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                AgentAction result = makeLlmRequest(goal, variables, screenshotBase64, pageSource, stepNumber, previousSteps, repeatWarning);
+                if (result != null && result.getAction() != null) {
+                    return result;
+                }
+                System.out.println("Model boş/geçersiz aksiyon döndürdü, tekrar deneniyor (deneme: " + attempt + ")");
+            } catch (Exception e) {
+                System.out.println("Deneme " + attempt + "/" + maxRetries + " başarısız: " + e.getMessage());
+                lastException = e;
+                if (attempt < maxRetries) {
+                    try {
+                        Thread.sleep(1000 * attempt); // Exponential backoff
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+        }
+        
+        throw new RuntimeException("Model " + maxRetries + " denemede geçerli JSON döndürmedi: " + 
+                (lastException != null ? lastException.getMessage() : "Bilinmeyen hata"), lastException);
+    }
+
+    private AgentAction makeLlmRequest(String goal, Map<String, String> variables, String screenshotBase64, String pageSource, int stepNumber, List<RunStep> previousSteps, String repeatWarning) throws IOException {
         try {
             var userContent = mapper.createArrayNode();
 
@@ -151,7 +277,11 @@ public class LlmAgent {
             StringBuilder historyText = new StringBuilder();
             if (previousSteps != null && !previousSteps.isEmpty()) {
                 historyText.append("Önceki adımlarda yaptıkların (en yenisi en altta):\n");
-                int start = Math.max(0, previousSteps.size() - 3);
+                // Daha once son 3 adimla siniirliydi -- ayni elemente aradaki baska bir
+                // tiklamadan (orn. bir popup/Devam et) sonra tekrar donuldugunde model bu
+                // eski denemeyi artik goremiyor, "ilk kez goruyormus" gibi tekrar deniyordu.
+                // 6'ya cikarilarak bu pencere genisletildi.
+                int start = Math.max(0, previousSteps.size() - 6);
                 for (int i = start; i < previousSteps.size(); i++) {
                     RunStep s = previousSteps.get(i);
                     historyText.append("- ").append(s.getStep()).append(". adım: ")
@@ -161,11 +291,29 @@ public class LlmAgent {
                 historyText.append("\n");
             }
 
+            // RunController'daki tekrar-tespiti (repeatCount==1, henuz FAIL esigi olan 2'ye
+            // ulasmadan) tetiklendiginde buraya dolu bir uyari metni geliyor -- promptun EN
+            // ONUNE, hedef/XML'den once koyuyoruz ki model gormezden gelmesi zor olsun.
+            String repeatWarningBlock = (repeatWarning != null && !repeatWarning.isBlank())
+                    ? ("!!! " + repeatWarning + " !!!\n\n")
+                    : "";
+
             var textNode = mapper.createObjectNode();
             textNode.put("type", "text");
-            textNode.put("text", context + historyText + "Hedef: " + goal + "\nBu " + stepNumber + ". adım. "
-                    + "Ekrandaki XML ağacı:\n" + pageSource
-                    +"\n\nYukarıdaki XML'e bakarak bir sonraki aksiyonu belirle.");
+            String baseText = repeatWarningBlock + context + historyText + "Hedef: " + goal + "\nBu " + stepNumber + ". adım. "
+                    + "Ekrandaki XML ağacı:\n" + pageSource;
+
+            // NOT (2026-09-10): Burada eskiden hedef metni "bul" kelimesini iceriyorsa ozel bir
+            // arama/kaydirma ipucu ekleniyordu. Bu ipucu SYSTEM_PROMPT'taki genel KAYDIRMA/URUN
+            // ARAMA kurallariyla CAKISIYORDU ve -- "yukari"/"asagi" kelimeleri icin -- direction
+            // degerini SYSTEM_PROMPT'un/gercek swipe() davranisinin TERSI sekilde aciklayarak modeli
+            // yanlis yone kaydirmaya yonlendiriyordu (bkz. AppiumDriverManager.swipe() ustundeki
+            // 2026-09-10 duzeltme notu). Artik tum arama/kaydirma rehberligi TEK bir yerde,
+            // SYSTEM_PROMPT icinde (KAYDIRMA / URUN ARAMA bolumleri) veriliyor -- iki yerin
+            // birbirinden sapip celiskili talimat vermesini onlemek icin bu ozel-durum kodu
+            // kaldirildi.
+
+            textNode.put("text", baseText + "\n\nYukarıdaki XML'e bakarak bir sonraki aksiyonu belirle.");
             userContent.add(textNode);
 
 
@@ -185,6 +333,11 @@ public class LlmAgent {
             body.put("model", appSettingsService.getOrCreate().getOpenrouterModel());
             body.set("messages", messages);
             body.put("max_tokens", 1024);
+            // Bu bir "hangi elemente tiklamaliyim" gibi TEK dogru cevabi olan bir karar --
+            // yaraticilik degil tutarlilik istiyoruz. Varsayilan temperature (~0.7-1.0) modelin
+            // ayni ekranda farkli seferlerde farkli/kararsiz secimler yapmasina katkida bulunuyordu.
+            // Dusuk bir deger (0.15) ayni durumda neredeyse hep ayni karari vermesini sagliyor.
+            body.put("temperature", 0.15);
 
             RequestBody requestBody = RequestBody.create(
                     mapper.writeValueAsString(body),
@@ -213,7 +366,16 @@ public class LlmAgent {
                     result = mapper.readValue(jsonOnly, AgentAction.class);
                 } catch (Exception parseEx) {
                     System.out.println("JSON parse edilemedi, modelin ham cevabı:\n" + content);
-                    throw new RuntimeException("Model geçerli JSON döndürmedi: " + parseEx.getMessage());
+                    System.out.println("JSON temizlenmiş hali:\n" + jsonOnly);
+                    // JSON'ı temizlemeyi dene - kaçış dizeleri sorun olabilir
+                    String cleanedJson = cleanJsonResponse(jsonOnly);
+                    try {
+                        result = mapper.readValue(cleanedJson, AgentAction.class);
+                        System.out.println("JSON temizleme ile başarıyla parse edildi");
+                    } catch (Exception cleanEx) {
+                        throw new RuntimeException("Model geçerli JSON döndürmedi: " + parseEx.getMessage() + 
+                                " (Temizlenmiş JSON da parse edilemedi: " + cleanEx.getMessage() + ")");
+                    }
                 }
                 if (result == null || result.getAction() == null) {
                     System.out.println("Model boş/geçersiz aksiyon döndürdü, ham cevap:\n" + content);
@@ -221,8 +383,9 @@ public class LlmAgent {
                 }
                 return result;
             }
-        } catch (IOException e) {
-            throw new RuntimeException("LLM aksiyon kararı alınırken hata oluştu", e);
+        } finally {
+            // IOException'ı yeniden fırlat, wrapper olarak değil
+            // Dış retry döngüsü bunu yakalayacak
         }
     }
 
@@ -248,6 +411,133 @@ public class LlmAgent {
             return cleaned.substring(start, end + 1);
         }
         return cleaned;
+    }
+
+    /**
+     * JSON yanıtını temizler - özellikle kaçış dizeleri ve geçersiz karakterleri düzeltir.
+     * LLM'ler bazen string alanlarda tırnak işaretlerini kaçış dizesi olmadan kullanır.
+     */
+    private String cleanJsonResponse(String json) {
+        if (json == null || json.isBlank()) return json;
+        
+        try {
+            // Önce geçerli JSON olup olmadığını kontrol et
+            mapper.readTree(json);
+            return json; // Zaten geçerli
+        } catch (Exception e) {
+            // Geçersiz JSON, temizlemeyi dene
+        }
+        
+        String cleaned = json;
+        
+        // reasoning ve target alanlarındaki kaçışsız tırnak işaretlerini düzelt
+        // Örnek: "reasoning": "Bu "butona" tıkla" → "reasoning": "Bu \"butona\" tıkla"
+        // Basit yaklaşım: string içindeki çift tırnakları kaçışlı hale getir
+        // reasoning alanını bul ve içindeki kaçışsız tırnakları düzelt
+        if (cleaned.contains("\"reasoning\":")) {
+            int reasoningStart = cleaned.indexOf("\"reasoning\":");
+            int reasoningValueStart = cleaned.indexOf("\"", reasoningStart + 12);
+            if (reasoningValueStart >= 0) {
+                reasoningValueStart++; // açılış tırnağından sonra
+                int reasoningValueEnd = cleaned.indexOf("\"", reasoningValueStart);
+                if (reasoningValueEnd > reasoningValueStart) {
+                    String reasoningValue = cleaned.substring(reasoningValueStart, reasoningValueEnd);
+                    String cleanedReasoning = reasoningValue.replace("\"", "\\\"");
+                    cleaned = cleaned.substring(0, reasoningValueStart) + 
+                              cleanedReasoning + 
+                              cleaned.substring(reasoningValueEnd);
+                }
+            }
+        }
+        
+        // target alanı için de aynı işlem
+        if (cleaned.contains("\"target\":")) {
+            int targetStart = cleaned.indexOf("\"target\":");
+            int targetValueStart = cleaned.indexOf("\"", targetStart + 9);
+            if (targetValueStart >= 0) {
+                targetValueStart++;
+                int targetValueEnd = cleaned.indexOf("\"", targetValueStart);
+                if (targetValueEnd > targetValueStart) {
+                    String targetValue = cleaned.substring(targetValueStart, targetValueEnd);
+                    String cleanedTarget = targetValue.replace("\"", "\\\"");
+                    cleaned = cleaned.substring(0, targetValueStart) + 
+                              cleanedTarget + 
+                              cleaned.substring(targetValueEnd);
+                }
+            }
+        }
+        
+        // text alanı için de aynı işlem
+        if (cleaned.contains("\"text\":")) {
+            int textStart = cleaned.indexOf("\"text\":");
+            int textValueStart = cleaned.indexOf("\"", textStart + 7);
+            if (textValueStart >= 0) {
+                textValueStart++;
+                int textValueEnd = cleaned.indexOf("\"", textValueStart);
+                if (textValueEnd > textValueStart) {
+                    String textValue = cleaned.substring(textValueStart, textValueEnd);
+                    String cleanedText = textValue.replace("\"", "\\\"");
+                    cleaned = cleaned.substring(0, textValueStart) + 
+                              cleanedText + 
+                              cleaned.substring(textValueEnd);
+                }
+            }
+        }
+        
+        return cleaned.trim();
+    }
+
+    // "Ne test etmek istiyorsun?" alanindaki auto_awesome ikonuna baglaniyor -- kullanicinin
+    // yazdigi ham/dagimik metni, AYNI anlami ve hedefi koruyarak daha net ve duzgun bir Turkce
+    // cumleye ceviriyor. callForSuggestions'tan farkli olarak JSON degil DUZ METIN donuyor --
+    // basit bir "yeniden yaz" gorevi icin JSON parse riskine/overhead'ine gerek yok.
+    public String improveGoalText(String rawText) {
+        if (rawText == null || rawText.isBlank()) return rawText;
+        try {
+            String prompt = "Asagidaki metin, bir mobil uygulama test senaryosunun hedefini tanimliyor "
+                    + "(bir kullanici bunu serbest metin olarak yazdi). AYNI anlami ve AYNI hedefi KORUYARAK, "
+                    + "daha net, duzgun ve anlasilir bir Turkce cumleye/cumlelere cevir. Yeni bilgi/adim EKLEME, "
+                    + "sadece ifadeyi duzelt. SADECE duzeltilmis metni dondur, baska hicbir aciklama/etiket/tirnak ekleme.\n\n"
+                    + "Metin: " + rawText;
+
+            var messages = mapper.createArrayNode();
+            var userMsg = mapper.createObjectNode();
+            userMsg.put("role", "user");
+            userMsg.put("content", prompt);
+            messages.add(userMsg);
+
+            var body = mapper.createObjectNode();
+            body.put("model", appSettingsService.getOrCreate().getOpenrouterModel());
+            body.set("messages", messages);
+            body.put("max_tokens", 300);
+            body.put("temperature", 0.3);
+
+            RequestBody requestBody = RequestBody.create(
+                    mapper.writeValueAsString(body),
+                    MediaType.parse("application/json")
+            );
+
+            Request request = new Request.Builder()
+                    .url(resolveApiUrl())
+                    .addHeader("Authorization", "Bearer " + appSettingsService.getOpenrouterApiKeyDecrypted())
+                    .addHeader("Content-Type", "application/json")
+                    .post(requestBody)
+                    .build();
+
+            try (Response response = client.newCall(request).execute()) {
+                if (!response.isSuccessful() || response.body() == null) {
+                    String errorBody = response.body() != null ? response.body().string() : "(boş yanıt)";
+                    throw new RuntimeException("LLM isteği başarısız: " + response.code() + " -> " + errorBody);
+                }
+                String responseBody = response.body().string();
+                JsonNode root = mapper.readTree(responseBody);
+                String content = root.at("/choices/0/message/content").asText();
+                if (content == null || content.isBlank()) return rawText;
+                return content.trim().replaceAll("^\"|\"$", "");
+            }
+        } catch (IOException e) {
+            throw new RuntimeException("Metin iyileştirilirken hata oluştu", e);
+        }
     }
 
     private List<ScenarioSuggestion> callForSuggestions(String prompt, int maxTokens) {

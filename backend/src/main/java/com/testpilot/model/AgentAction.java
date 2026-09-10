@@ -22,10 +22,19 @@ public class AgentAction {//LLM'in ham JSON cevabının Java karşılığı, kul
     public String getReasoning() { return reasoning; }
     public void setReasoning(String reasoning) { this.reasoning = reasoning; }
 
-    private String target; // ör: "Sepetim ikonu", "Arama kutusu" - insan-okunabilir açıklama
+    private String target; // ör: "Sepetim ikonu", "Arama kutusu" - insan-okunabilir açıklama (geçmiş/tekrar-tespiti bunu kullanır)
 
     public String getTarget() { return target; }
-    public void setTarget(String target) { this.target = target; }}
+    public void setTarget(String target) { this.target = target; }
+
+    // Modelin, filterPageSource'un XML listesinin başına koyduğu "[N]" numarasından seçtiği
+    // element kimliği (ör: "7"). Koordinat artık modelin kendi bounds hesabından değil, backend'in
+    // bu ID'den bulduğu gerçek bounds'tan hesaplanıyor (bkz. AppiumDriverManager.resolveTargetCenter).
+    private String elementId;
+
+    public String getElementId() { return elementId; }
+    public void setElementId(String elementId) { this.elementId = elementId; }
+}
 
 
 /*Olası soru: "Neden AgentAction ile RunStep ayrı sınıflar?" →

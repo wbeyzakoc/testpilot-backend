@@ -1,13 +1,49 @@
+# Oracle Database Free — yerel geliştirme için (bkz. admin panel + Oracle DB planı).
+#
+# NEDEN gvenzl/oracle-free imajı: Oracle'ın KENDİ resmi imajı container-registry.oracle.com
+# üzerinden lisans kabulü + ayrı bir Oracle hesabıyla giriş gerektirir (ekstra sürtünme).
+# gvenzl/oracle-free, Docker Hub'da DOĞRUDAN çekilebilen, yaygın kullanılan (CI/test
+# ortamlarında standart haline gelmiş), AYNI Oracle Database Free motorunu paketleyen bir
+# topluluk imajıdır — lisans/giriş derdi yok, ilk kurulum çok daha hızlı.
+#
+# NOT — bu SADECE yerel geliştirme içindir: gerçek/kurumsal bir Oracle instance geldiğinde
+# backend'in .env dosyasındaki ORACLE_DB_* değerlerini o instance'a işaret edecek şekilde
+# değiştirmen yeterli — yazılan DDL/SQL kodu standart Oracle SQL'dir, ikisinde de aynen çalışır.
+#
+# NOT — RAM: bu container'ın ilk açılışı YAVAŞTIR (birkaç dakika sürebilir, "database is not
+# ready" mesajları normal). Milvus/Selenium Grid'i AYNI ANDA çalıştırıyorsan ve makine 8GB RAM
+# ise (bu oturumda daha önce RAM sıkışıklığı yaşadık) bu üçünü BİRLİKTE çalıştırmayı önermem —
+# admin panel/Oracle üzerinde çalışırken diğer ikisini durdurman daha güvenli olur.
 services:
-  oracle:
-    image: gvenzl/oracle-free:latest
-    container_name: testpilot-oracle
+  oracle-db:
+    # DEĞİŞİKLİK 1: 'faststart' imajına geçildi. İlk kurulumu yapılmış hazır şablon kullandığı için açılışı ciddi derecede hızlandırır ve RAM yükünü azaltır.
+    image: gvenzl/oracle-free:23-slim-faststart
+    container_name: testpilot-oracle-db
+
+    # DEĞİŞİKLİK 2: Kapanma durumunda Docker'ın container'ı otomatik ayağa kaldırması sağlandı.
+    restart: always
+
     ports:
       - "1521:1521"
     environment:
-      ORACLE_PASSWORD: Bk.25122512
+      # NEDEN burada sabit bir şifre var (secret olarak DEĞİL): bu container SADECE localhost'a
+      # bağlı, dışarıya kapalı, tamamen atılabilir/yeniden oluşturulabilir bir geliştirme
+      # veritabanı — gerçek bir kimlik bilgisi/secret değil. İstersen değiştirebilirsin, ama
+      # backend/.env'deki ORACLE_DB_PASSWORD ile AYNI kalmalı.
+      ORACLE_PASSWORD: TestPilotLocal2024
+      APP_USER: testpilot
+      APP_USER_PASSWORD: TestPilotLocal2024
     volumes:
-      - oracle-data:/opt/oracle/oradata
+      - oracle-db-data:/opt/oracle/oradata
+
+    # DEĞİŞİKLİK 3: Healthcheck parametreleri optimize edildi. İlk açılış periyodu (start_period)
+    # ve test aralıkları uzatılarak veritabanı hazır olmadan container'ın "unhealthy" denilerek öldürülmesi engellendi.
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 40s
+      timeout: 15s
+      retries: 15
+      start_period: 8m
 
 volumes:
-  oracle-data:
+  oracle-db-data:

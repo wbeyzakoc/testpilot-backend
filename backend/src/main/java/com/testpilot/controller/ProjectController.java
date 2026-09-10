@@ -95,6 +95,7 @@ public class ProjectController {
         project.setName(name);
         project.setCreatedBy(admin.getUsername());
         project.setMembers(members);
+        project.setMaxParallelRuns(normalizeMaxParallelRuns(request.getMaxParallelRuns()));
         projectRepository.save(project);
         return ProjectDto.from(project);
     }
@@ -127,9 +128,20 @@ public class ProjectController {
         }
         Set<AppUser> members = new HashSet<>(userRepository.findAllById(memberIds));
         project.setMembers(members);
+        project.setMaxParallelRuns(normalizeMaxParallelRuns(request.getMaxParallelRuns()));
 
         projectRepository.save(project);
         return ProjectDto.from(project);
+    }
+
+    // null (sinirsiz) oldugu gibi geciyor; sifir veya negatif deger reddediliyor --
+    // suites.tsx'teki kuyruklama mantigi icin en az 1 slot anlamli.
+    private Integer normalizeMaxParallelRuns(Integer value) {
+        if (value == null) return null;
+        if (value < 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Paralel koşum sayısı en az 1 olmalı");
+        }
+        return value;
     }
 
     // Kullanıcılar sayfasındaki toplu "seçili kullanıcıları projeye ekle"

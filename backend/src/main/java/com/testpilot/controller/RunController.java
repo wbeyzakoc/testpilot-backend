@@ -50,6 +50,53 @@ public class RunController {
         return INFO_LINK_KEYWORDS.stream().anyMatch(t::contains);
     }
 
+    // ============================================================================================
+    // OTOMATIK KAYDIRMA (element bulunamadiginda)
+    //
+    // Onceden, hedeflenen element ekranda bulunamadiginda (ya XML'de hic karsiligi yoktu ya da XML'de
+    // vardi ama fiziksel ekranin disindaydi) tek yapilan sey modele bir sonraki adimda "belki kaydirman
+    // gerekir" diye bir uyari vermekti -- kaydirip kaydirmamaya modelin KENDISI karar veriyordu. Zayif
+    // modeller bu ipucunu gormezden gelip ayni (artik gecersiz) hedefi tekrar tekrar deniyor, boylece
+    // repeatCount esigine takilip test bosuna FAIL oluyordu.
+    //
+    // Simdi: ayni ekranda ust uste NOT_FOUND_SCROLL_THRESHOLD kadar "bulunamadi" yasandiginda backend
+    // KENDISI ekrani kaydiriyor (asagi/yukari SIRAYLA), modelin karar vermesini beklemiyor. Toplam
+    // otomatik kaydirma hakki MAX_AUTO_SCROLLS ile sinirli -- hem asagi hem yukari birkac kez denenip
+    // yine de bulunamiyorsa artik orada gercekten yok demektir, test acik bir hata mesajiyla durdurulur.
+    //
+    // GUNCELLEME: Threshold 2'den 1'e dusuruldu -- ilk denemede bile element ekranda gorusmuyorsa
+    // (XML'de var ama fiziksel ekranin altinda/kaydirilmis alanda) HEMEN kaydirma yapilsin,
+    // gereksiz tekrar denemelerinden kacinilsin. Bu ozellikle ilk ekranda gosterilen urun sayisi
+    // sinirli olan liste ekranlarinda (6. urunu bulmak icin kaydirma gerektiginde) onemli.
+    private static final int NOT_FOUND_SCROLL_THRESHOLD = 1;
+    private static final int MAX_AUTO_SCROLLS = 8; // 4'ten 8'e çıkarıldı - daha fazla kaydırma hakkı
+    // Her kaydırma "down" (aşağı) olmalı - içerik genellikle aşağıda
+    // Sadece 8. kaydırma "up" (yukarı) - eğer hiçbiri çalışmadıysa son bir deneme
+    private static final String[] AUTO_SCROLL_DIRECTIONS = {"down", "down", "down", "down", "down", "down", "down", "up"};
+
+    private record AutoScrollOutcome(boolean scrolled, boolean exhausted, String direction) {}
+
+    private String turkishDirection(String direction) {
+        return "down".equals(direction) ? "aşağı" : "yukarı";
+    }
+
+    // notFoundStreak[0]/autoScrollAttempts[0]: executeRun'in yerel sayaclari, referans olarak
+    // (tek elemanli dizi ile) buraya tasiniyor ki bu metot onlari guncelleyebilsin.
+    private AutoScrollOutcome autoScrollIfNeeded(String runId, int[] notFoundStreak, int[] autoScrollAttempts) {
+        notFoundStreak[0]++;
+        if (notFoundStreak[0] < NOT_FOUND_SCROLL_THRESHOLD) {
+            return new AutoScrollOutcome(false, false, null);
+        }
+        if (autoScrollAttempts[0] >= MAX_AUTO_SCROLLS) {
+            return new AutoScrollOutcome(false, true, null);
+        }
+        String direction = AUTO_SCROLL_DIRECTIONS[autoScrollAttempts[0] % AUTO_SCROLL_DIRECTIONS.length];
+        appiumDriverManager.swipe(runId, direction);
+        autoScrollAttempts[0]++;
+        notFoundStreak[0] = 0;
+        return new AutoScrollOutcome(true, false, direction);
+    }
+
     private final AppiumDriverManager appiumDriverManager;
     private final LlmAgent llmAgent;
     private final RunStore runStore;
@@ -383,6 +430,20 @@ public class RunController {
         return Map.of("screenshot", screenshot);
     }
 
+    // create.tsx'teki "Ne test etmek istiyorsun?" alanindaki auto_awesome ikonuna baglaniyor --
+    // henuz bir Run olusturulmadan (bu asamada id yok), kullanicinin yazdigi ham metni LLM'e
+    // gonderip daha duzgun bir cumleye cevirtiyor. Sonuc direkt uygulanmiyor -- frontend onizleme
+    // olarak gosterip kullanici onaylarsa textarea'ya yaziyor.
+    @PostMapping("/improve-goal")
+    public Map<String, String> improveGoal(@RequestBody Map<String, String> body) {
+        String text = body.get("text");
+        if (text == null || text.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Metin boş olamaz");
+        }
+        String improved = llmAgent.improveGoalText(text.trim());
+        return Map.of("improved", improved);
+    }
+
     @GetMapping("/{id}/suggestions")
     public List<ScenarioSuggestion> suggestScenarios(
             @PathVariable String id,
@@ -425,7 +486,8 @@ public class RunController {
         }
     }
 
-    private void executeRun(Run run, Map<String, String> variables, String platform, String appPackage, String appActivity, boolean captureScreenshot, boolean recordVideo, boolean parallel) {        int consecutiveFails = 0;
+    private void executeRun(Run run, Map<String, String> variables, String platform, String appPackage, String appActivity, boolean captureScreenshot, boolean recordVideo, boolean parallel) {
+        int consecutiveFails = 0;
         String screenshot = null;
         Integer configuredMaxSteps = appSettingsService.getOrCreate().getMaxSteps();
         int maxSteps = (configuredMaxSteps != null && configuredMaxSteps > 0) ? configuredMaxSteps : 15;
@@ -438,12 +500,31 @@ public class RunController {
                 appiumDriverManager.startSession(run.getId(), platform, appPackage, appActivity, parallel);
                 appiumDriverManager.resetToFreshState(run.getId(), platform, appPackage);
             }
+            // Uygulama açıldıktan sonra sayfanın tamamen yüklenmesi için bekleme
+            // Liste ekranlarında ürünlerin yüklenmesi zaman alabilir
             Thread.sleep(2500);
             if (recordVideo) {
                 appiumDriverManager.startScreenRecording(run.getId());
             }
+            // Ek bekleme: İlk etkileşimden önce sayfanın tamamen stabil olması için
+            Thread.sleep(3000);
             String lastActionSignature = null;
             int repeatCount = 0;
+            // Ayni ekranda ust uste "element bulunamadi" yasanma sayisi ve buna karsilik simdiye
+            // kadar yapilan otomatik kaydirma sayisi -- bkz. autoScrollIfNeeded. Tek elemanli dizi
+            // olarak tutuluyor ki private metot bunlari referans olarak guncelleyebilsin.
+            int[] notFoundStreak = {0};
+            int[] autoScrollAttempts = {0};
+            // İlk adımda otomatik kaydırma için özel bayrak - sayfa yüklenirken uzak elementlere
+            // tıklanmaması için
+            boolean isFirstStep = true;
+            // Bir sonraki decideNextAction cagrisina tasinacak, tek seferlik uyari --
+            // repeatCount tam olarak 1'e (yani ayni action+target 2. kez ust uste) ulastiginda
+            // doldurulur, o adimin promptuna eklendikten hemen sonra null'lanir. Amac: modelin
+            // 3. tekrarda (repeatCount>=2) asagida zaten FAIL olmadan once, kendine ait tekrari
+            // gecmis metnindeki dolayli ipuclarindan CIKARSAMASINA guvenmek yerine, dogrudan ve
+            // acik bir uyariyla "az once tam olarak bunu denedin, farkli bir sey yap" demek.
+            String repeatWarning = null;
             for (int i = 1; i <= maxSteps; i++) {
                 if (run.isStopRequested()) {
                     run.setStatus("stopped");
@@ -454,19 +535,51 @@ public class RunController {
 
                 screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
                 liveScreenshots.put(run.getId(), screenshot);
-                String rawPageSource = appiumDriverManager.getPageSource(run.getId());
-                String filteredPageSource = appiumDriverManager.filterPageSource(rawPageSource);
+                
+                String rawPageSource;
+                String filteredPageSource;
+                try {
+                    rawPageSource = appiumDriverManager.getPageSource(run.getId());
+                    filteredPageSource = appiumDriverManager.filterPageSource(rawPageSource);
+                } catch (Exception pageEx) {
+                    System.out.println("Page source alınamadı, adım atlanıyor: " + pageEx.getMessage());
+                    run.getSteps().add(new RunStep(i, "failed", null, 
+                            "UI yanıt vermiyor, sayfa kaynağı alınamadı: " + pageEx.getMessage()));
+                    runStore.save(run);
+                    Thread.sleep(2000);
+                    continue;
+                }
                 System.out.println("=== FİLTRELENMİŞ XML (adım " + i + ") ===\n" + filteredPageSource);
+
+                // İlk adımda sayfa yüklenmesi için ek bekleme (modelin hemen tıklama yapmasını engeller)
+                if (isFirstStep) {
+                    System.out.println("[RUN] İlk adım: Sayfa stabilitesi için 2 saniye ek bekleme");
+                    Thread.sleep(2000);
+                    isFirstStep = false;
+                    // İlk adımda sayfa yüklenene kadar bekle, sonra normal akışa geç
+                    try {
+                        rawPageSource = appiumDriverManager.getPageSource(run.getId());
+                        filteredPageSource = appiumDriverManager.filterPageSource(rawPageSource);
+                    } catch (Exception pageEx) {
+                        System.out.println("İlk adım page source alınamadı: " + pageEx.getMessage());
+                        run.getSteps().add(new RunStep(i, "failed", null, 
+                                "Sayfa yüklenemedi: " + pageEx.getMessage()));
+                        runStore.save(run);
+                        Thread.sleep(2000);
+                        continue;
+                    }
+                }
 
                 AgentAction action;
                 try {
-                    action = llmAgent.decideNextAction(run.getGoal(), variables, screenshot, filteredPageSource, i, run.getSteps());
+                    action = llmAgent.decideNextAction(run.getGoal(), variables, screenshot, filteredPageSource, i, run.getSteps(), repeatWarning);
                 } catch (Exception decideEx) {
                     run.getSteps().add(new RunStep(i, "failed", null, "Model kararı alınamadı, tekrar deneniyor: " + decideEx.getMessage()));
                     runStore.save(run);
                     Thread.sleep(800);
                     continue;
                 }
+                repeatWarning = null; // bu adimin promptuna zaten eklendi, tuketildi
 
                 if (isInformationalLink(action.getTarget())) {
                     run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
@@ -476,12 +589,34 @@ public class RunController {
                     continue;
                 }
 
-                String currentSignature = action.getAction() + "|" + action.getTarget();
-                if (currentSignature.equals(lastActionSignature)) {
-                    repeatCount++;
-                } else {
+                // "swipe" (kaydirma) donguyu tespitinin disinda tutuluyor -- uzaktaki bir elemente
+                // ulasmak icin ust uste birden fazla kaydirma yapmak GERCEKTEN gerekli ve normal bir
+                // davranis (ayni butona ust uste tiklamaktan farkli olarak), bunu "takilma" saymak
+                // yanlis pozitif uretiyordu.
+                if ("swipe".equals(action.getAction())) {
                     repeatCount = 0;
-                    lastActionSignature = currentSignature;
+                    lastActionSignature = null;
+                    notFoundStreak[0] = 0; // model kendi kaydirdi -- ekran degisti, eski "bulunamadi" gecmisi artik gecersiz
+                } else {
+                    String currentSignature = action.getAction() + "|" + action.getTarget();
+                    if (currentSignature.equals(lastActionSignature)) {
+                        repeatCount++;
+                    } else {
+                        repeatCount = 0;
+                        lastActionSignature = currentSignature;
+                    }
+                }
+
+                // repeatCount==1: bu, ayni action+target'in 2. kez ust uste secildigi an -- henuz
+                // FAIL esigi olan >=2'ye (3. tekrar) ulasilmadi. Modele bir sonraki adimda acik bir
+                // uyari verip kendini duzeltmesi icin SON bir sans taniyoruz.
+                if (repeatCount == 1) {
+                    repeatWarning = "UYARI: Bir onceki adimda AYNI elemente (\"" + action.getTarget()
+                            + "\") AYNI aksiyonla (" + action.getAction() + ") mudahale ettin ve hicbir ilerleme kaydedilmedi. "
+                            + "Bunu bir kez daha tekrarlarsan test otomatik basarisiz sayilacak. Eger bu bir metin girme alaniysa "
+                            + "(mail, sifre, arama kutusu vb.) KESINLIKLE action=type kullan ve text alanini doldur -- ASLA tekrar "
+                            + "action=tap deneme. Metin alani degilse, XML'de TAMAMEN FARKLI (daha once denemedigin) baska bir "
+                            + "elementi hedefle.";
                 }
 
                 if (repeatCount >= 2) {
@@ -494,36 +629,192 @@ public class RunController {
                     runStore.save(run);
                     return;
                 }
+                // Model artik (x,y) merkezini KENDISI hesaplamiyor -- bounds aritmetigi kucuk/zayif
+                // modellerde en sik hataya yol acan adimdi (birkac pikselik sapma komsu elemente
+                // tiklanmasina sebep oluyordu). Bunun yerine model sadece filterPageSource'un
+                // gosterdigi "[N]" numarasini (action.getElementId()) seciyor, gercek merkezi
+                // resolveTargetCenter XML'deki bounds'tan BIZ hesapliyoruz. ID gecersiz/eksikse
+                // (ör. model hala eski usul serbest metin donduruyorsa) etikete, o da olmazsa
+                // resource-id/text'ten uretilen bir XPath ile canli uygulamada aramaya dusuyor.
+                // Hicbiri sonuc vermezse (null doner) modelin verdigi x,y'ye dokunmuyoruz -- guvenli
+                // varsayilan davranis korunuyor.
+                if (("tap".equals(action.getAction()) || "type".equals(action.getAction()))
+                        && action.getTarget() != null && !action.getTarget().isBlank()) {
+                    System.out.println("[TARGET] Hedef çözülüyor: elementId=" + action.getElementId() + ", target=" + action.getTarget());
+                    int[] corrected = appiumDriverManager.resolveTargetCenter(run.getId(), rawPageSource, action.getElementId(), action.getTarget());
+                    if (corrected != null) {
+                        action.setX(corrected[0]);
+                        action.setY(corrected[1]);
+                        System.out.println("[TARGET] Çözüldü: x=" + corrected[0] + ", y=" + corrected[1]);
+                    } else {
+                        System.out.println("[TARGET] Çözülemedi - hiçbir yöntem işe yaramadı");
+                    }
+                }
+
+                // XML, henuz kaydirilmamis (asagida/yukarida kalan) elementleri de icerebiliyor --
+                // boyle bir elementin bounds'u FIZIKSEL ekranin disinda kalir. Modele ekranin gercek
+                // boyutunu vermiyoruz, o yuzden bunu XML'de "clickable=true" gorup normal bir hedef
+                // sanabiliyor -- oraya dokunmak/yazmak hicbir seye isabet etmiyor (sessiz no-op),
+                // model ilerleme kaydedemeden ayni hedefe tekrar tekrar deniyor ve tekrar-dongusu
+                // korumasina takiliyor. Once gercek ekran boyutuyla karsilastirip, hedef disaridaysa
+                // dokunmadan/yazmadan atliyoruz ve modele ACIKCA "once kaydir" uyarisi veriyoruz.
+                if (("tap".equals(action.getAction()) || "type".equals(action.getAction()))
+                        && action.getTarget() != null && !action.getTarget().isBlank()) {
+                    int[] screenSize = appiumDriverManager.getScreenSize(run.getId());
+                    if (screenSize != null
+                            && (action.getX() < 0 || action.getX() > screenSize[0]
+                                || action.getY() < 0 || action.getY() > screenSize[1])) {
+                        run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
+                                "Hedef ekranın görünür alanının dışında kaldığı için atlandı: " + action.getReasoning()));
+                        runStore.save(run);
+
+                        AutoScrollOutcome outcome = autoScrollIfNeeded(run.getId(), notFoundStreak, autoScrollAttempts);
+                        if (outcome.exhausted()) {
+                            run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
+                                    "Element ekranda bulunamadı; ekran hem yukarı hem aşağı kaydırılarak denendi, yine de bulunamadı."));
+                            run.setStatus("failed");
+                            run.setError("Hedeflenen element (\"" + action.getTarget() + "\") ekranın hiçbir kaydırma konumunda bulunamadı.");
+                            run.setFinishedAt(Instant.now().toString());
+                            if (captureScreenshot) run.setFailureScreenshot(screenshot);
+                            runStore.save(run);
+                            return;
+                        } else if (outcome.scrolled()) {
+                            run.getSteps().add(new RunStep(i, "swipe", null,
+                                    "Hedeflenen element (\"" + action.getTarget() + "\") ekranda görünmediği için ekran otomatik "
+                                            + "olarak " + turkishDirection(outcome.direction()) + " kaydırıldı."));
+                            runStore.save(run);
+                            repeatCount = 0;
+                            lastActionSignature = null;
+                            repeatWarning = "Az önce hedeflediğin \"" + action.getTarget() + "\" elementi ekranda görünmediği için "
+                                    + "SİSTEM ekranı otomatik olarak " + turkishDirection(outcome.direction()) + " kaydırdı. Şimdi "
+                                    + "ekrandaki YENİ XML listesine bak: hedef artık görünür olabilir (aynı elementi tekrar "
+                                    + "seçebilirsin) ya da farklı bir element gerekebilir.";
+                        } else {
+                            repeatWarning = "Hedeflediğin \"" + action.getTarget() + "\" elementi mevcut ekranda GÖRÜNMÜYOR "
+                                    + "(XML'de var ama fiziksel ekranın dışında/altında kalıyor). Bu elemente TEKRAR dokunmayı ya da "
+                                    + "yazmayı deneme -- hiçbir şeye isabet etmez. Önce şunu sorgula: bu ara adıma GERÇEKTEN ihtiyacın "
+                                    + "var mı, yoksa hedef zaten şu an ekranda GÖRÜNEN başka bir elementle tamamlanabilir mi? Eğer "
+                                    + "gerçekten bu elemente ulaşman gerekiyorsa, onu görünür kılacak DOĞRU aksiyonu bul (bu bir "
+                                    + "kaydırma olabilir, ama tek seçenek bu değil -- bir menü/gezinme ikonuna dokunmak ya da başka "
+                                    + "bir aksiyon da olabilir). Aynı görünmeyen elementi ısrarla hedeflemeye devam etme.";
+                        }
+                        Thread.sleep(400);
+                        continue;
+                    }
+                }
+
                 switch (action.getAction()) {
                     case "tap" -> {
                         if (!appiumDriverManager.isValidCoordinate(rawPageSource, action.getX(), action.getY())) {
-                            run.getSteps().add(new RunStep(i, "tap", action.getTarget(),
-                                    "GEÇERSİZ KOORDİNAT (XML'de karşılığı yok), adım atlandı: " + action.getReasoning()));
+                            // Geçersiz koordinat - tıklama yapılamadı, adım FAILED
+                            run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
+                                    "GEÇERSİZ KOORDİNAT (XML'de karşılığı yok), tıklama yapılamadı: " + action.getReasoning()));
                             runStore.save(run);
-                            Thread.sleep(500);
-                            continue;
+                            consecutiveFails++; // Başarısız sayısını artır
+
+                            // 2 üst üste başarısız deneme → model uyarısı
+                            if (consecutiveFails >= 2) {
+                                System.out.println("[RUN] UYARI: " + consecutiveFails + " kez başarısız deneme. Farklı bir element veya action seçilmeli!");
+                            }
+
+                            AutoScrollOutcome outcome = autoScrollIfNeeded(run.getId(), notFoundStreak, autoScrollAttempts);
+                            if (outcome.exhausted()) {
+                                run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
+                                        "Element ekranda bulunamadı; ekran hem yukarı hem aşağı kaydırılarak denendi, yine de bulunamadı."));
+                                run.setStatus("failed");
+                                run.setError("Hedeflenen element (\"" + action.getTarget() + "\") ekranın hiçbir kaydırma konumunda bulunamadı.");
+                                run.setFinishedAt(Instant.now().toString());
+                                if (captureScreenshot) run.setFailureScreenshot(screenshot);
+                                runStore.save(run);
+                                return;
+                            } else if (outcome.scrolled()) {
+                                run.getSteps().add(new RunStep(i, "swipe", null,
+                                        "Hedeflenen element (\"" + action.getTarget() + "\") üst üste bulunamadığı için ekran otomatik "
+                                                + "olarak " + turkishDirection(outcome.direction()) + " kaydırıldı."));
+                                runStore.save(run);
+                                repeatCount = 0;
+                                lastActionSignature = null;
+                                repeatWarning = "Az önce hedeflediğin \"" + action.getTarget() + "\" elementi üst üste bulunamadığı "
+                                        + "için SİSTEM ekranı otomatik olarak " + turkishDirection(outcome.direction()) + " kaydırdı. "
+                                        + "Şimdi ekrandaki YENİ XML listesine bakarak DEVAM ET. Aynı hedefi tekrar dene!";
+                                // Kaydırma sonrası aynı hedefi tekrar denemek için adım sayısını artırmama
+                                // (döngü devam edecek, model yeni XML'e bakarak aynı hedefi tekrar deneyecek)
+                            }
+                            Thread.sleep(800);
+                            continue; // Aynı adımda tekrar deneme için döngüye devam
                         }
+                        
+                        // Koordinat geçerli - tıklama yap
                         run.getSteps().add(new RunStep(i, "tap", action.getTarget(), action.getReasoning()));
-                        appiumDriverManager.tap(run.getId(), action.getX(), action.getY());
-                        Thread.sleep(400); // geçiş animasyonunun oturması için ekstra bekleme
+                        System.out.println("[RUN] Tap işlemi yapılıyor: " + action.getTarget() + " (x=" + action.getX() + ", y=" + action.getY() + ")");
+                        
+                        try {
+                            appiumDriverManager.tap(run.getId(), action.getX(), action.getY());
+                            notFoundStreak[0] = 0; // başarılı etkileşim -- geçmiş "bulunamadi" sayacı sıfırlanıyor
+                            consecutiveFails = 0; // Başarılı işlem → başarısız sayacı sıfırla
+                            
+                            // Tap sonrası daha uzun bekleme - uygulamanın arka plana düşmesini önlemek için
+                            System.out.println("[RUN] Tap sonrası bekleme (uygulama arka plana düşmesin diye 1.5s)...");
+                            Thread.sleep(1500);
+                            System.out.println("[RUN] Tap işlemi BAŞARILI: " + action.getTarget());
+                        } catch (Exception tapEx) {
+                            // Tap başarısız oldu
+                            System.out.println("[RUN] Tap HATA: " + tapEx.getMessage());
+                            run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
+                                    "Tıklama başarısız: " + tapEx.getMessage()));
+                            runStore.save(run);
+                            consecutiveFails++; // Başarısız sayısını artır
+                            
+                            Thread.sleep(800);
+                            continue; // Aynı hedefi tekrar deneme
+                        }
 
                     }
                     case "type" -> {
                         if (!appiumDriverManager.isValidCoordinate(rawPageSource, action.getX(), action.getY())) {
-                            run.getSteps().add(new RunStep(i, "type", action.getTarget(), "GEÇERSİZ KOORDİNAT, adım atlanıyor"));
+                            // Geçersiz koordinat - yazma yapılamadı, adım FAILED
+                            run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
+                                    "GEÇERSİZ KOORDİNAT, yazma yapılamadı"));
                             runStore.save(run);
-                            Thread.sleep(500);
-                            continue;
+                            consecutiveFails++; // Başarısız sayısını artır
+
+                            AutoScrollOutcome outcome = autoScrollIfNeeded(run.getId(), notFoundStreak, autoScrollAttempts);
+                            if (outcome.exhausted()) {
+                                run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
+                                        "Element ekranda bulunamadı; ekran hem yukarı hem aşağı kaydırılarak denendi, yine de bulunamadı."));
+                                run.setStatus("failed");
+                                run.setError("Hedeflenen element (\"" + action.getTarget() + "\") ekranın hiçbir kaydırma konumunda bulunamadı.");
+                                run.setFinishedAt(Instant.now().toString());
+                                if (captureScreenshot) run.setFailureScreenshot(screenshot);
+                                runStore.save(run);
+                                return;
+                            } else if (outcome.scrolled()) {
+                                run.getSteps().add(new RunStep(i, "swipe", null,
+                                        "Hedeflenen element (\"" + action.getTarget() + "\") üst üste bulunamadığı için ekran otomatik "
+                                                + "olarak " + turkishDirection(outcome.direction()) + " kaydırıldı."));
+                                runStore.save(run);
+                                repeatCount = 0;
+                                lastActionSignature = null;
+                                repeatWarning = "Az önce hedeflediğin \"" + action.getTarget() + "\" elementi üst üste bulunamadığı "
+                                        + "için SİSTEM ekranı otomatik olarak " + turkishDirection(outcome.direction()) + " kaydırdı. "
+                                        + "Şimdi ekrandaki YENİ XML listesine bakarak DEVAM ET. Aynı hedefi tekrar dene!";
+                            }
+                            Thread.sleep(800);
+                            continue; // Aynı hedefi tekrar deneme
                         }
                         try {
                             run.getSteps().add(new RunStep(i, "type", action.getTarget(), action.getReasoning()));
                             appiumDriverManager.typeText(run.getId(), action.getX(), action.getY(), action.getText());
+                            notFoundStreak[0] = 0; // başarılı etkileşim
+                            consecutiveFails = 0; // Başarılı işlem → başarısız sayacı sıfırla
                         } catch (Exception typeEx) {
+                            // Type başarısız oldu
                             run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
-                                    "Alana yazılamadı (odak oturmadı): " + typeEx.getMessage()));
+                                    "Yazma başarısız (odak oturmadı): " + typeEx.getMessage()));
                             runStore.save(run);
-                            Thread.sleep(500);
-                            continue;
+                            consecutiveFails++; // Başarısız sayısını artır
+                            Thread.sleep(800);
+                            continue; // Aynı hedefi tekrar deneme
                         }
                     }
                     case "swipe" -> appiumDriverManager.swipe(run.getId(), action.getDirection());

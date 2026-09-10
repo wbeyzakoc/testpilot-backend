@@ -42,6 +42,39 @@ public class LdapAuthenticator {
         this.credentialEncryptor = credentialEncryptor;
     }
 
+    // Active Directory'nin AuthenticationException govdesine gomdugu "data XXX" alt-hata
+    // kodu -- LDAP Ayarlari sayfasinda (ldap.tsx) ekrana ham "[LDAP: error code 49 -
+    // 80090308: LdapErr: DSID-...comment: AcceptSecurityContext error, data 52e, v4563]"
+    // gibi bir metin yerine, terminal loguna zaten dustugumuz bu kodu kisa/anlasilir bir
+    // Turkce cumleye cevirip EN BASA ekliyoruz -- ham detay hala altta/sonda duruyor,
+    // teknik kazmak isteyen icin, ama ilk bakista ne oldugu net oluyor.
+    private static final java.util.Map<String, String> AD_SUBCODE_REASONS = java.util.Map.ofEntries(
+            java.util.Map.entry("525", "kullanıcı bulunamadı"),
+            java.util.Map.entry("52e", "kullanıcı adı veya şifre hatalı"),
+            java.util.Map.entry("530", "bu saatte giriş yapma izni yok"),
+            java.util.Map.entry("531", "bu bilgisayardan/istasyondan giriş yapma izni yok"),
+            java.util.Map.entry("532", "şifrenin süresi dolmuş"),
+            java.util.Map.entry("533", "hesap devre dışı bırakılmış"),
+            java.util.Map.entry("701", "hesabın süresi dolmuş"),
+            java.util.Map.entry("773", "kullanıcı ilk girişte şifresini sıfırlamalı"),
+            java.util.Map.entry("775", "hesap kilitlenmiş")
+    );
+
+    private static final java.util.regex.Pattern AD_SUBCODE_PATTERN =
+            java.util.regex.Pattern.compile("data ([0-9a-fA-F]{3,4})");
+
+    // rawMessage icinde "data 52e" gibi bir kod bulursa esligindeki Turkce aciklamayi
+    // dondurur ("kullanıcı adı veya şifre hatalı (AD kodu: 52e)"); tanimadigi/bulamadigi
+    // durumda null doner, cagiran taraf o zaman genel bir metne duser.
+    private static String friendlyAdReason(String rawMessage) {
+        if (rawMessage == null) return null;
+        var matcher = AD_SUBCODE_PATTERN.matcher(rawMessage);
+        if (!matcher.find()) return null;
+        String code = matcher.group(1).toLowerCase();
+        String reason = AD_SUBCODE_REASONS.get(code);
+        return reason == null ? null : reason + " (AD kodu: " + code + ")";
+    }
+
     // Ayarlar panelden (ldap.tsx -> PUT /settings/ldap) kaydedilmeden ONCE
     // baglantiyi test etmek icin -- login akisindaki authenticate()'ten farkli
     // olarak burada gercek bir kullanici sifresi yok, sadece "bu ayarlarla
@@ -74,8 +107,10 @@ public class LdapAuthenticator {
                 ctx.close();
             } catch (AuthenticationException e) {
                 log.error("LDAP test - manager kimlik bilgileri reddedildi: url={}, managerDn={}", settings.getUrl(), settings.getManagerDn(), e);
+                String friendly = friendlyAdReason(e.getMessage());
+                String headline = friendly != null ? friendly : "kimlik bilgileri reddedildi";
                 throw new LdapAuthException(
-                        "LDAP: manager hesabıyla bağlanılamadı -- kimlik bilgileri reddedildi. Detay: "
+                        "LDAP: manager hesabıyla bağlanılamadı -- " + headline + ". Detay: "
                                 + e.getMessage(), e);
             } catch (CommunicationException e) {
                 log.error("LDAP test - sunucuya ulasilamadi: url={}", settings.getUrl(), e);

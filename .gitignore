@@ -6,3 +6,4 @@ runs-history.json
 videos/
 .DS_Store
 secrets.properties
+allure-report/

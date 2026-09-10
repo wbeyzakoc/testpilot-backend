@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
 // JUnit'ten üretilmiş bir Allure raporuyla birebir aynı görünür/davranır
 // (zaman çizelgesi, kategori dağılımı, geçmiş/trend grafiği dahil).
 @Service
-public class iAllureReportService {
+public class AllureReportService {
 
     private final ObjectMapper mapper = new ObjectMapper();
 

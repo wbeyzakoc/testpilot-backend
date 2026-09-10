@@ -11,6 +11,7 @@ import com.testpilot.security.CurrentUserResolver;
 import com.testpilot.service.AllureReportService;
 import com.testpilot.settings.AppSettingsService;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -57,6 +58,7 @@ public class AllureController {
     // ya da o projenin üyesi olan herhangi bir USER çağırabilir
     // (SuiteController.requireProjectAccess'teki AYNI kontrol).
     @PostMapping("/generate")
+    @Transactional(readOnly = true)
     public Map<String, Object> generate(@RequestHeader(value = "X-Username", required = false) String requester,
                                          @RequestParam(required = false) Long projectId,
                                          @RequestParam(required = false, defaultValue = "all") String scope) {

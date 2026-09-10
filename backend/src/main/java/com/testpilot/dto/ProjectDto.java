@@ -11,6 +11,7 @@ public class ProjectDto {
     private String name;
     private String createdBy;
     private Instant createdAt;
+    private Integer maxParallelRuns;
     private List<AppUserDto> members;
 
     public static ProjectDto from(Project p) {
@@ -19,6 +20,7 @@ public class ProjectDto {
         dto.name = p.getName();
         dto.createdBy = p.getCreatedBy();
         dto.createdAt = p.getCreatedAt();
+        dto.maxParallelRuns = p.getMaxParallelRuns();
         dto.members = p.getMembers().stream().map(AppUserDto::from).toList();
         return dto;
     }
@@ -31,6 +33,8 @@ public class ProjectDto {
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public Integer getMaxParallelRuns() { return maxParallelRuns; }
+    public void setMaxParallelRuns(Integer maxParallelRuns) { this.maxParallelRuns = maxParallelRuns; }
     public List<AppUserDto> getMembers() { return members; }
     public void setMembers(List<AppUserDto> members) { this.members = members; }
 }
