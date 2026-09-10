@@ -243,7 +243,7 @@ public class LlmAgent {
     public AgentAction decideNextAction(String goal, Map<String, String> variables, String screenshotBase64, String pageSource, int stepNumber, List<RunStep> previousSteps, String repeatWarning) {
         int maxRetries = 3;
         Exception lastException = null;
-        
+
         for (int attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 AgentAction result = makeLlmRequest(goal, variables, screenshotBase64, pageSource, stepNumber, previousSteps, repeatWarning);
@@ -263,8 +263,8 @@ public class LlmAgent {
                 }
             }
         }
-        
-        throw new RuntimeException("Model " + maxRetries + " denemede geçerli JSON döndürmedi: " + 
+
+        throw new RuntimeException("Model " + maxRetries + " denemede geçerli JSON döndürmedi: " +
                 (lastException != null ? lastException.getMessage() : "Bilinmeyen hata"), lastException);
     }
 
@@ -373,7 +373,7 @@ public class LlmAgent {
                         result = mapper.readValue(cleanedJson, AgentAction.class);
                         System.out.println("JSON temizleme ile başarıyla parse edildi");
                     } catch (Exception cleanEx) {
-                        throw new RuntimeException("Model geçerli JSON döndürmedi: " + parseEx.getMessage() + 
+                        throw new RuntimeException("Model geçerli JSON döndürmedi: " + parseEx.getMessage() +
                                 " (Temizlenmiş JSON da parse edilemedi: " + cleanEx.getMessage() + ")");
                     }
                 }
@@ -419,7 +419,7 @@ public class LlmAgent {
      */
     private String cleanJsonResponse(String json) {
         if (json == null || json.isBlank()) return json;
-        
+
         try {
             // Önce geçerli JSON olup olmadığını kontrol et
             mapper.readTree(json);
@@ -427,9 +427,9 @@ public class LlmAgent {
         } catch (Exception e) {
             // Geçersiz JSON, temizlemeyi dene
         }
-        
+
         String cleaned = json;
-        
+
         // reasoning ve target alanlarındaki kaçışsız tırnak işaretlerini düzelt
         // Örnek: "reasoning": "Bu "butona" tıkla" → "reasoning": "Bu \"butona\" tıkla"
         // Basit yaklaşım: string içindeki çift tırnakları kaçışlı hale getir
@@ -443,13 +443,13 @@ public class LlmAgent {
                 if (reasoningValueEnd > reasoningValueStart) {
                     String reasoningValue = cleaned.substring(reasoningValueStart, reasoningValueEnd);
                     String cleanedReasoning = reasoningValue.replace("\"", "\\\"");
-                    cleaned = cleaned.substring(0, reasoningValueStart) + 
-                              cleanedReasoning + 
+                    cleaned = cleaned.substring(0, reasoningValueStart) +
+                              cleanedReasoning +
                               cleaned.substring(reasoningValueEnd);
                 }
             }
         }
-        
+
         // target alanı için de aynı işlem
         if (cleaned.contains("\"target\":")) {
             int targetStart = cleaned.indexOf("\"target\":");
@@ -460,13 +460,13 @@ public class LlmAgent {
                 if (targetValueEnd > targetValueStart) {
                     String targetValue = cleaned.substring(targetValueStart, targetValueEnd);
                     String cleanedTarget = targetValue.replace("\"", "\\\"");
-                    cleaned = cleaned.substring(0, targetValueStart) + 
-                              cleanedTarget + 
+                    cleaned = cleaned.substring(0, targetValueStart) +
+                              cleanedTarget +
                               cleaned.substring(targetValueEnd);
                 }
             }
         }
-        
+
         // text alanı için de aynı işlem
         if (cleaned.contains("\"text\":")) {
             int textStart = cleaned.indexOf("\"text\":");
@@ -477,13 +477,13 @@ public class LlmAgent {
                 if (textValueEnd > textValueStart) {
                     String textValue = cleaned.substring(textValueStart, textValueEnd);
                     String cleanedText = textValue.replace("\"", "\\\"");
-                    cleaned = cleaned.substring(0, textValueStart) + 
-                              cleanedText + 
+                    cleaned = cleaned.substring(0, textValueStart) +
+                              cleanedText +
                               cleaned.substring(textValueEnd);
                 }
             }
         }
-        
+
         return cleaned.trim();
     }
 

@@ -34,6 +34,8 @@ public class ProjectController {
     private final SuiteRepository suiteRepository;
     private final RunRepository runRepository;
 
+
+
     public ProjectController(ProjectRepository projectRepository, AppUserRepository userRepository,
                               CurrentUserResolver currentUserResolver, SuiteRepository suiteRepository,
                               RunRepository runRepository) {
@@ -95,7 +97,6 @@ public class ProjectController {
         project.setName(name);
         project.setCreatedBy(admin.getUsername());
         project.setMembers(members);
-        project.setMaxParallelRuns(normalizeMaxParallelRuns(request.getMaxParallelRuns()));
         projectRepository.save(project);
         return ProjectDto.from(project);
     }
@@ -128,7 +129,6 @@ public class ProjectController {
         }
         Set<AppUser> members = new HashSet<>(userRepository.findAllById(memberIds));
         project.setMembers(members);
-        project.setMaxParallelRuns(normalizeMaxParallelRuns(request.getMaxParallelRuns()));
 
         projectRepository.save(project);
         return ProjectDto.from(project);

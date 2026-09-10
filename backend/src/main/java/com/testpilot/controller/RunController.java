@@ -1,6 +1,4 @@
 package com.testpilot.controller;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 
 import com.testpilot.agent.LlmAgent;
 import com.testpilot.agent.RunStore;
@@ -16,12 +14,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
-import java.util.concurrent.ConcurrentHashMap;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @RestController
@@ -107,8 +106,8 @@ public class RunController {
     private final Map<String, String> liveScreenshots = new ConcurrentHashMap<>();
 
     public RunController(AppiumDriverManager appiumDriverManager, LlmAgent llmAgent, RunStore runStore,
-                          ProjectRepository projectRepository, AppUserRepository userRepository,
-                          AppSettingsService appSettingsService, SuiteRepository suiteRepository) {
+                             ProjectRepository projectRepository, AppUserRepository userRepository,
+                             AppSettingsService appSettingsService, SuiteRepository suiteRepository) {
         this.appiumDriverManager = appiumDriverManager;
         this.llmAgent = llmAgent;
         this.runStore = runStore;
@@ -535,7 +534,7 @@ public class RunController {
 
                 screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
                 liveScreenshots.put(run.getId(), screenshot);
-                
+
                 String rawPageSource;
                 String filteredPageSource;
                 try {
@@ -543,7 +542,7 @@ public class RunController {
                     filteredPageSource = appiumDriverManager.filterPageSource(rawPageSource);
                 } catch (Exception pageEx) {
                     System.out.println("Page source alınamadı, adım atlanıyor: " + pageEx.getMessage());
-                    run.getSteps().add(new RunStep(i, "failed", null, 
+                    run.getSteps().add(new RunStep(i, "failed", null,
                             "UI yanıt vermiyor, sayfa kaynağı alınamadı: " + pageEx.getMessage()));
                     runStore.save(run);
                     Thread.sleep(2000);
@@ -562,7 +561,7 @@ public class RunController {
                         filteredPageSource = appiumDriverManager.filterPageSource(rawPageSource);
                     } catch (Exception pageEx) {
                         System.out.println("İlk adım page source alınamadı: " + pageEx.getMessage());
-                        run.getSteps().add(new RunStep(i, "failed", null, 
+                        run.getSteps().add(new RunStep(i, "failed", null,
                                 "Sayfa yüklenemedi: " + pageEx.getMessage()));
                         runStore.save(run);
                         Thread.sleep(2000);
@@ -624,7 +623,7 @@ public class RunController {
                             "Aynı aksiyon (" + action.getTarget() + ") üst üste tekrarlandı, model ilerleme kaydedemiyor. Test durduruldu."));
                     run.setStatus("failed");
                     run.setError("Model aynı elemente tekrar tekrar tıklayıp döngüye girdi");
-                    run.setFinishedAt(java.time.Instant.now().toString());
+                    run.setFinishedAt(Instant.now().toString());
                     if (captureScreenshot) run.setFailureScreenshot(screenshot);
                     runStore.save(run);
                     return;
@@ -743,16 +742,16 @@ public class RunController {
                             Thread.sleep(800);
                             continue; // Aynı adımda tekrar deneme için döngüye devam
                         }
-                        
+
                         // Koordinat geçerli - tıklama yap
                         run.getSteps().add(new RunStep(i, "tap", action.getTarget(), action.getReasoning()));
                         System.out.println("[RUN] Tap işlemi yapılıyor: " + action.getTarget() + " (x=" + action.getX() + ", y=" + action.getY() + ")");
-                        
+
                         try {
                             appiumDriverManager.tap(run.getId(), action.getX(), action.getY());
                             notFoundStreak[0] = 0; // başarılı etkileşim -- geçmiş "bulunamadi" sayacı sıfırlanıyor
                             consecutiveFails = 0; // Başarılı işlem → başarısız sayacı sıfırla
-                            
+
                             // Tap sonrası daha uzun bekleme - uygulamanın arka plana düşmesini önlemek için
                             System.out.println("[RUN] Tap sonrası bekleme (uygulama arka plana düşmesin diye 1.5s)...");
                             Thread.sleep(1500);
@@ -764,7 +763,7 @@ public class RunController {
                                     "Tıklama başarısız: " + tapEx.getMessage()));
                             runStore.save(run);
                             consecutiveFails++; // Başarısız sayısını artır
-                            
+
                             Thread.sleep(800);
                             continue; // Aynı hedefi tekrar deneme
                         }
