@@ -73,7 +73,16 @@ public class AppiumDriverManager {
                         .setBundleId(appIdentifier)
                         .setAutoAcceptAlerts(true)
                         .setNoReset(false)
-                        .setNewCommandTimeout(Duration.ofSeconds(300));
+                        .setNewCommandTimeout(Duration.ofSeconds(300))
+                        // [DUZELTME 2026-09-11] "autoLaunch=false": Appium session
+                        // acilirken uygulamayi KENDISI otomatik baslatmasin. Aksi halde
+                        // sıra su oluyordu: session -> Appium app'i acar (1. acilis) ->
+                        // resetToFreshState terminateApp ile kapatir -> clearApp ->
+                        // activateApp ile tekrar acar (2. acilis). Kullanicidan bakinca
+                        // "uygulama kendi kendine kapanip aciliyor" gibi gorunuyordu.
+                        // autoLaunch=false ile session sirasinda hic acilis olmuyor,
+                        // TEK acilis resetToFreshState->activateApp adiminda gerceklesiyor.
+                        .amend("autoLaunch", false);
                 if (deviceName != null && !deviceName.isBlank()) options.setDeviceName(deviceName);
                 if (platformVersion != null && !platformVersion.isBlank()) options.setPlatformVersion(platformVersion);
 
@@ -89,7 +98,11 @@ public class AppiumDriverManager {
                         .setAutoGrantPermissions(true)
                         .setNoReset(false)
                         .setAppWaitDuration(Duration.ofSeconds(20))
-                        .setNewCommandTimeout(Duration.ofSeconds(300));
+                        .setNewCommandTimeout(Duration.ofSeconds(300))
+                        // [DUZELTME 2026-09-11] bkz. yukaridaki iOS yorumu - ayni sebep,
+                        // Android tarafinda da session acilisinda otomatik baslatmayi
+                        // engelliyoruz; tek acilis resetToFreshState->activateApp'te olur.
+                        .amend("autoLaunch", false);
                 if (deviceName != null && !deviceName.isBlank()) options.setDeviceName(deviceName);
                 if (platformVersion != null && !platformVersion.isBlank()) options.setPlatformVersion(platformVersion);
 
@@ -119,6 +132,14 @@ public class AppiumDriverManager {
     //
     // API NOTU: InteractsWithApps arayuzunde clearApp metodu YOKTUR. Android'de veri temizliginin
     // standart yolu "mobile: clearApp" mobile command'idir.
+    //
+    // [DUZELTME 2026-09-11] startSession artik "autoLaunch=false" ile aciliyor (bkz.
+    // startSession icindeki .amend("autoLaunch", false)), yani session kurulunca Appium
+    // uygulamayi KENDISI baslatmiyor. Bu sayede burada terminateApp adimina artik gerek
+    // yok -- uygulama zaten calismiyor. terminateApp+bekleme adimini kaldirmak hem
+    // gereksiz "kapat" komutunu (ve onun getirdigi gorsel kapanma hissini) ortadan
+    // kaldiriyor hem de reset akisini ~2 saniye hizlandiriyor. Tek acilis SADECE
+    // asagidaki activateApp cagrisinda gerceklesiyor.
     // ============================================================================================
     public void resetToFreshState(String runId, String platform, String appIdentifier) {
         AppiumDriver driver = driverFor(runId);
@@ -126,26 +147,14 @@ public class AppiumDriverManager {
 
         try {
             if ("ios".equalsIgnoreCase(platform)) {
-                try {
-                    apps.terminateApp(appIdentifier);
-                } catch (Exception ignored) {}
-                Thread.sleep(1500);
+                // autoLaunch=false sayesinde uygulama henuz baslamadi; dogrudan aktive et.
                 apps.activateApp(appIdentifier);
                 Thread.sleep(3000);
                 return;
             }
 
             // ---- Android ----
-            // 1) Uygulamayi TAMAMEN kapat
-            try {
-                boolean killed = apps.terminateApp(appIdentifier);
-                System.out.println("[reset] terminateApp -> killed=" + killed);
-            } catch (Exception termEx) {
-                System.out.println("[reset] terminateApp uyarisi (zararsiz): " + termEx.getMessage());
-            }
-            Thread.sleep(2000);
-
-            // 2) Uygulama KAPALIYKEN verisini temizle
+            // 1) Uygulama henuz hic baslamadi (autoLaunch=false) -- once verisini temizle
             try {
                 ((JavascriptExecutor) driver).executeScript(
                         "mobile: clearApp",
@@ -157,7 +166,7 @@ public class AppiumDriverManager {
             }
             Thread.sleep(1000);
 
-            // 3) Uygulamayi temiz veriyle yeniden baslat
+            // 2) Uygulamayi temiz veriyle TEK SEFERLIK baslat
             apps.activateApp(appIdentifier);
             Thread.sleep(3000);
 
