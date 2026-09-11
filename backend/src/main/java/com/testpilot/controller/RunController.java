@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 @RestController
@@ -460,6 +461,10 @@ public class RunController {
         String screenshot = null;
         Integer configuredMaxSteps = appSettingsService.getOrCreate().getMaxSteps();
         int maxSteps = (configuredMaxSteps != null && configuredMaxSteps > 0) ? configuredMaxSteps : 15;
+        
+        // Arka plan ekran güncelleme döngüsü için flag
+        AtomicBoolean screenRefreshRunning = new AtomicBoolean(false);
+        
         try {
             // ============================================================================================
             // [DUZELTME 2026-09-10] OTURUM BAŞLATMA -- TEK SEFERLİK
@@ -491,9 +496,37 @@ public class RunController {
             }
 
             // Uygulama açıldıktan sonra UI'ın tam yüklenmesi için bekleme
-            Thread.sleep(4000);
+            Thread.sleep(2000);
             if (recordVideo) {
                 appiumDriverManager.startScreenRecording(run.getId());
+            }
+            // İlk ekran görüntüsünü hemen al
+            if (captureScreenshot) {
+                screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
+                liveScreenshots.put(run.getId(), screenshot);
+            }
+            
+            // Arka plan ekran güncelleme döngüsünü başlat (video gibi akıcı görüntü için)
+            if (captureScreenshot) {
+                screenRefreshRunning.set(true);
+                Thread refreshThread = new Thread(() -> {
+                    while (screenRefreshRunning.get() && !run.isStopRequested()) {
+                        try {
+                            // Her 250 ms'de ekran görüntüsünü güncelle (4 fps - video akıcılığı)
+                            Thread.sleep(250);
+                            String freshScreenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
+                            liveScreenshots.put(run.getId(), freshScreenshot);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        } catch (Exception e) {
+                            System.out.println("[RUN] Arka plan ekran güncelleme hatası: " + e.getMessage());
+                        }
+                    }
+                });
+                refreshThread.setDaemon(true);
+                refreshThread.start();
+                System.out.println("[RUN] Arka plan ekran güncelleme döngüsü başlatıldı (250ms)");
             }
 
             String lastActionSignature = null;
@@ -517,11 +550,19 @@ public class RunController {
                     run.setStatus("stopped");
                     run.setFinishedAt(Instant.now().toString());
                     runStore.save(run);
+                    screenRefreshRunning.set(false);
                     return;
                 }
 
-                screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
-                liveScreenshots.put(run.getId(), screenshot);
+                // Ekran görüntüsünü HER adımda EN BAŞTA al (arka plan döngüsü çalışsa da garanti için)
+                if (captureScreenshot) {
+                    try {
+                        screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
+                        liveScreenshots.put(run.getId(), screenshot);
+                    } catch (Exception screenEx) {
+                        System.out.println("[RUN] Ekran görüntüsü alınamadı (adım " + i + "): " + screenEx.getMessage());
+                    }
+                }
 
                 String rawPageSource;
                 String filteredPageSource;
@@ -537,24 +578,29 @@ public class RunController {
                     run.getSteps().add(new RunStep(i, "failed", null,
                             "UI yanıt vermiyor, sayfa kaynağı alınamadı: " + pageEx.getMessage()));
                     runStore.save(run);
-                    Thread.sleep(2000);
+                    Thread.sleep(1000);
                     continue;
                 }
                 System.out.println("=== FİLTRELENMİŞ XML (adım " + i + ") ===\n" + filteredPageSource);
 
                 if (isFirstStep) {
-                    System.out.println("[RUN] İlk adım: Sayfa stabilitesi için 2 saniye ek bekleme");
-                    Thread.sleep(2000);
+                    System.out.println("[RUN] İlk adım: Sayfa stabilitesi için 1 saniye ek bekleme");
+                    Thread.sleep(1000);
                     isFirstStep = false;
                     try {
                         rawPageSource = appiumDriverManager.getPageSource(run.getId());
                         filteredPageSource = appiumDriverManager.filterPageSource(rawPageSource, run.getGoal());
+                        // Ekran görüntüsünü tekrar al
+                        if (captureScreenshot) {
+                            screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
+                            liveScreenshots.put(run.getId(), screenshot);
+                        }
                     } catch (Exception pageEx) {
                         System.out.println("İlk adım page source alınamadı: " + pageEx.getMessage());
                         run.getSteps().add(new RunStep(i, "failed", null,
                                 "Sayfa yüklenemedi: " + pageEx.getMessage()));
                         runStore.save(run);
-                        Thread.sleep(2000);
+                        Thread.sleep(1000);
                         continue;
                     }
                 }
@@ -677,6 +723,7 @@ public class RunController {
                     run.setFinishedAt(Instant.now().toString());
                     if (captureScreenshot) run.setFailureScreenshot(screenshot);
                     runStore.save(run);
+                    screenRefreshRunning.set(false);
                     return;
                 }
 
@@ -808,7 +855,19 @@ public class RunController {
                             consecutiveFails = 0;
                             swipeRefusedCount[0] = 0;
 
+                            // Tap sonrası ekran görüntüsünü anında güncelle (arka plan döngüsü de çalışıyor)
+                            if (captureScreenshot) {
+                                try {
+                                    screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
+                                    liveScreenshots.put(run.getId(), screenshot);
+                                    System.out.println("[RUN] Tap sonrası ekran görüntüsü güncellendi");
+                                } catch (Exception screenEx) {
+                                    System.out.println("[RUN] Tap sonrası ekran görüntüsü alınamadı: " + screenEx.getMessage());
+                                }
+                            }
+
                             System.out.println("[RUN] Tap sonrası bekleme (uygulama arka plana düşmesin diye 1.5s)...");
+                            // Arka plan döngüsü bu sırada da çalışıyor, görüntü akıcı kalıyor
                             Thread.sleep(1500);
                             System.out.println("[RUN] Tap işlemi BAŞARILI: " + action.getTarget());
 
@@ -819,7 +878,8 @@ public class RunController {
                                 run.setStatus("passed");
                                 run.setFinishedAt(Instant.now().toString());
                                 runStore.save(run);
-                                System.out.println("[RUN] Ürün seçimi tamamlandı, test bitiriliyor.");
+                                System.out.println("[RUN] Ürün seçimi tamamlandı, test bitiriliyor, arka plan döngüsü durduruluyor.");
+                                screenRefreshRunning.set(false);
                                 return;
                             }
                         } catch (Exception tapEx) {
@@ -879,6 +939,7 @@ public class RunController {
                             appiumDriverManager.typeText(run.getId(), action.getX(), action.getY(), action.getText());
                             notFoundStreak[0] = 0;
                             consecutiveFails = 0;
+                            // Type sonrası ekran güncellemesi (arka plan döngüsü de çalışıyor)
                         } catch (Exception typeEx) {
                             run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
                                     "Yazma başarısız (odak oturmadı): " + typeEx.getMessage()));
@@ -931,6 +992,7 @@ public class RunController {
                                 run.setFinishedAt(Instant.now().toString());
                                 if (captureScreenshot) run.setFailureScreenshot(screenshot);
                                 runStore.save(run);
+                                screenRefreshRunning.set(false);
                                 return;
                             }
 
@@ -954,7 +1016,10 @@ public class RunController {
                         // Hedef ekranda yok -- swipe guvenli
                         swipeRefusedCount[0] = 0;
                         appiumDriverManager.swipe(run.getId(), action.getDirection());
-                    }
+                        
+                            // Kaydırma sonrası ekran güncellemesi (arka plan döngüsü de çalışıyor)
+                            Thread.sleep(1000); // Kaydırma sonrası bekleme
+                        }
                     case "wait" -> Thread.sleep(1500);
                     case "done" -> {
                         run.getSteps().add(new RunStep(i, "done", null, action.getReasoning()));
@@ -972,6 +1037,7 @@ public class RunController {
                             run.setFinishedAt(Instant.now().toString());
                             if (captureScreenshot) run.setFailureScreenshot(screenshot);
                             runStore.save(run);
+                            screenRefreshRunning.set(false);
                             return;
                         }
                         run.getSteps().add(new RunStep(i, "failed", null, "İlk 'fail' denemesi reddedildi, tekrar deneniyor: " + action.getReasoning()));
@@ -994,6 +1060,7 @@ public class RunController {
             run.setFinishedAt(Instant.now().toString());
             if (captureScreenshot) run.setFailureScreenshot(screenshot);
             runStore.save(run);
+            screenRefreshRunning.set(false);
         } catch (Exception e) {
             e.printStackTrace();
             // [DUZELTME 2026-09-10] invalidateSession CAGIRMIYORUZ -- finally'deki stopSession
@@ -1003,7 +1070,10 @@ public class RunController {
             run.setFinishedAt(Instant.now().toString());
             if (captureScreenshot) run.setFailureScreenshot(screenshot);
             runStore.save(run);
+            screenRefreshRunning.set(false);
         } finally {
+            // Arka plan ekran güncelleme döngüsünü durdur
+            screenRefreshRunning.set(false);
             liveScreenshots.remove(run.getId());
             if (recordVideo) {
                 boolean saved = appiumDriverManager.stopScreenRecordingAndSave(run.getId());
