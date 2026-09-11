@@ -40,6 +40,16 @@ public class AppiumDriverManager {
     // Her run kendi Appium session'ını (driver'ını) tutar - paralel koşum için
     private final Map<String, AppiumDriver> drivers = new ConcurrentHashMap<>();
 
+    // ============================================================================================
+    // startSession -- Android capability'leri temizlendi (2026-09-10)
+    //
+    // ONCEKI SORUNLAR:
+    //   - shouldWaitForQuiescence / waitForQuiescence / useNewWDA -> iOS-only, Android'de
+    //     ya yok sayilir ya da UiAutomator2'yi tutarsiz davranisa iter.
+    //   - unicodeKeyboard (prefix'siz, typo: "univodeKeyboard") deprecated.
+    //   - resetKeyboard=true sistem klavyesini sifirliyor, focus'taki uygulama klavye
+    //     degisimini handle edemeyip oluyor -> "uygulama kendi kendine kapaniyor".
+    // ============================================================================================
     public AppiumDriver startSession(String runId, String platform, String appIdentifier,
                                      String appActivity, boolean parallel) {
         AppiumDriver existing = drivers.get(runId);
@@ -47,14 +57,10 @@ public class AppiumDriverManager {
             return existing;
         }
 
-        // gridUrl/defaultAppPackage/defaultAppActivity artık panelden (DB'den) okunuyor.
         AppSettings settings = appSettingsService.getOrCreate();
         String gridUrl = settings.getAppiumGridUrl();
         String defaultAppPackage = settings.getAndroidAppPackage();
         String defaultAppActivity = settings.getAndroidAppActivity();
-        // deviceName/platformVersion: sadece device farm (BrowserStack vb.) kullanirken
-        // doldurulur -- bu ikisi bossa hicbir capability eklenmez, yerel Appium/Grid
-        // davranisi hic degismez.
         String deviceName = settings.getDeviceName();
         String platformVersion = settings.getPlatformVersion();
 
@@ -66,6 +72,7 @@ public class AppiumDriverManager {
                         .setAutomationName("XCUITest")
                         .setBundleId(appIdentifier)
                         .setAutoAcceptAlerts(true)
+                        .setNoReset(false)
                         .setNewCommandTimeout(Duration.ofSeconds(300));
                 if (deviceName != null && !deviceName.isBlank()) options.setDeviceName(deviceName);
                 if (platformVersion != null && !platformVersion.isBlank()) options.setPlatformVersion(platformVersion);
@@ -81,12 +88,8 @@ public class AppiumDriverManager {
                         .setAppActivity(activity)
                         .setAutoGrantPermissions(true)
                         .setNoReset(false)
-                        .amend("appium:resetKeyboard", true)
-                        .amend("univodeKeyboard", true)
-                        .amend("appium:useNewWDA", true)
-                        .amend("appium:shouldWaitForQuiescence", false)
-                        .amend("appium:waitForQuiescence", false)
-                        .setNewCommandTimeout(Duration.ofSeconds(1800));
+                        .setAppWaitDuration(Duration.ofSeconds(20))
+                        .setNewCommandTimeout(Duration.ofSeconds(300));
                 if (deviceName != null && !deviceName.isBlank()) options.setDeviceName(deviceName);
                 if (platformVersion != null && !platformVersion.isBlank()) options.setPlatformVersion(platformVersion);
 
@@ -108,14 +111,61 @@ public class AppiumDriverManager {
         return driver;
     }
 
+    // ============================================================================================
+    // resetToFreshState -- terminate -> clear -> activate SIRASI (2026-09-10)
+    //
+    // ONCEKI HATA: clearApp uygulama HALA CALISIRKEN yapiliyordu. Uygulama process'i ayaktayken
+    // verileri silinince crash ediyor -> Android auto-restart -> "acilip kapaniyor" belirtisi.
+    //
+    // API NOTU: InteractsWithApps arayuzunde clearApp metodu YOKTUR. Android'de veri temizliginin
+    // standart yolu "mobile: clearApp" mobile command'idir.
+    // ============================================================================================
     public void resetToFreshState(String runId, String platform, String appIdentifier) {
         AppiumDriver driver = driverFor(runId);
-        if ("ios".equalsIgnoreCase(platform)) {
-            ((InteractsWithApps) driver).terminateApp(appIdentifier);
-            ((InteractsWithApps) driver).activateApp(appIdentifier);
-        } else {
-            ((JavascriptExecutor) driver).executeScript("mobile: clearApp", Map.of("appId", appIdentifier));
-            ((InteractsWithApps) driver).activateApp(appIdentifier);
+        InteractsWithApps apps = (InteractsWithApps) driver;
+
+        try {
+            if ("ios".equalsIgnoreCase(platform)) {
+                try {
+                    apps.terminateApp(appIdentifier);
+                } catch (Exception ignored) {}
+                Thread.sleep(1500);
+                apps.activateApp(appIdentifier);
+                Thread.sleep(3000);
+                return;
+            }
+
+            // ---- Android ----
+            // 1) Uygulamayi TAMAMEN kapat
+            try {
+                boolean killed = apps.terminateApp(appIdentifier);
+                System.out.println("[reset] terminateApp -> killed=" + killed);
+            } catch (Exception termEx) {
+                System.out.println("[reset] terminateApp uyarisi (zararsiz): " + termEx.getMessage());
+            }
+            Thread.sleep(2000);
+
+            // 2) Uygulama KAPALIYKEN verisini temizle
+            try {
+                ((JavascriptExecutor) driver).executeScript(
+                        "mobile: clearApp",
+                        Map.of("appId", appIdentifier)
+                );
+                System.out.println("[reset] clearApp basarili");
+            } catch (Exception clearEx) {
+                System.out.println("[reset] clearApp basarisiz (zararsiz): " + clearEx.getMessage());
+            }
+            Thread.sleep(1000);
+
+            // 3) Uygulamayi temiz veriyle yeniden baslat
+            apps.activateApp(appIdentifier);
+            Thread.sleep(3000);
+
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("resetToFreshState kesildi", ie);
+        } catch (Exception e) {
+            throw new RuntimeException("resetToFreshState basarisiz: " + e.getMessage(), e);
         }
     }
 
@@ -162,7 +212,6 @@ public class AppiumDriverManager {
 
         for (int attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                // UI quiescence beklemeden direkt page source al
                 String source = driver.getPageSource();
                 if (source != null && !source.isEmpty()) {
                     return source;
@@ -174,8 +223,6 @@ public class AppiumDriverManager {
                 if (attempt < maxRetries) {
                     try {
                         Thread.sleep(2000L * attempt);
-
-                        // UI thread bloke olduysa, basit bir action ile uyanmasını sağla
                         try {
                             if (driver instanceof AndroidDriver) {
                                 ((AndroidDriver) driver).pressKey(new KeyEvent(AndroidKey.HOME));
@@ -187,7 +234,6 @@ public class AppiumDriverManager {
                                 ((JavascriptExecutor) driver).executeScript("mobile: pressKey", Map.of("key", "back"));
                             }
                         } catch (Exception ignore) {
-                            // Home/back basma başarısız olabilir, devam et
                         }
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
@@ -201,10 +247,6 @@ public class AppiumDriverManager {
                 (lastException != null ? lastException.getMessage() : "Bilinmeyen hata"), lastException);
     }
 
-    // Ekranin GERCEK piksel boyutu -- findElementCenter/isValidCoordinate XML'deki bounds'a
-    // gore calisiyor, ama XML henuz kaydirilmamis (asagida/yukarida kalan) elementleri de
-    // icerebiliyor: boyle bir elementin bounds'u fiziksel ekranin disinda kalir, oraya
-    // dokunmak hicbir seye isabet etmez.
     public int[] getScreenSize(String runId) {
         try {
             Dimension size = driverFor(runId).manage().window().getSize();
@@ -214,8 +256,9 @@ public class AppiumDriverManager {
         }
     }
 
-    // filterPageSource ve findElementCenter'in ikisi de AYNI parse+numaralandirma mantigina
-    // ihtiyac duyuyor -- tek bir yerde topladik.
+    // ============================================================================================
+    // ELEM PARSE
+    // ============================================================================================
     private record Elem(String label, String bounds, boolean clickable, boolean isPassword, String className,
                         String resourceId, String text, String contentDesc) {}
 
@@ -274,7 +317,6 @@ public class AppiumDriverManager {
             }
         }
 
-        // Ayni etiket birden fazla kez ortaya cikiyorsa, " (1)", " (2)" gibi sira numarasi ekle.
         Map<String, Integer> labelCounts = new HashMap<>();
         for (Elem e : collected) {
             if (!e.label().isBlank()) {
@@ -298,7 +340,13 @@ public class AppiumDriverManager {
 
     private static final int CHAR_BUDGET = 8000;
 
-    private List<Elem> buildEmittedList(String rawPageSource) {
+    // ============================================================================================
+    // buildEmittedList -- goal-aware sirali liste (2026-09-10)
+    //   - Hedefle eslesen elementler listenin BASINA tasinir -> weak LLM ilk satirlarda
+    //     dogru cevabi gorur (context penceresinde kaybolmaz).
+    //   - [urun: X] zenginlestirmesi ile gorseller urun adiyla etiketlenir.
+    // ============================================================================================
+    private List<Elem> buildEmittedList(String rawPageSource, String goal) {
         List<Elem> numbered = parseNumberedElements(rawPageSource);
 
         List<Elem> labeledEls = new ArrayList<>();
@@ -321,32 +369,184 @@ public class AppiumDriverManager {
         ordered.addAll(textOnlyEls);
         ordered.addAll(unlabeledEls);
 
+        if (goal != null && !goal.isBlank()) {
+            Set<String> keywords = extractKeywords(goal);
+            if (!keywords.isEmpty()) {
+                ordered.sort((a, b) -> {
+                    int sa = relevanceScore(a, keywords);
+                    int sb = relevanceScore(b, keywords);
+                    if (sa != sb) return Integer.compare(sb, sa);
+                    return 0;
+                });
+            }
+        }
+
+        List<Elem> allForContext = new ArrayList<>(numbered);
+
         List<Elem> emitted = new ArrayList<>();
         int budgetUsed = 0;
         for (Elem e : ordered) {
-            String line = formatLine(emitted.size() + 1, e);
+            String enrichedLabel = enrichImageLabel(e, allForContext);
+            Elem toEmit = enrichedLabel.equals(e.label())
+                    ? e
+                    : new Elem(enrichedLabel, e.bounds(), e.clickable(), e.isPassword(),
+                    e.className(), e.resourceId(), e.text(), e.contentDesc());
+            String line = formatLine(emitted.size() + 1, toEmit);
             if (budgetUsed + line.length() + 1 > CHAR_BUDGET) break;
             budgetUsed += line.length() + 1;
-            emitted.add(e);
+            emitted.add(toEmit);
         }
         return emitted;
     }
 
-    private String formatLine(int id, Elem e) {
-        String passwordFlag = e.isPassword() ? " password=true" : "";
-        String classFlag = (e.className() != null && !e.className().isBlank()) ? " class=" + e.className() : "";
-        String textFlag = (e.text() != null && !e.text().isBlank()) ? " text=\"" + e.text().replace("\"", "'") + "\"" : "";
-        String contentDescFlag = (e.contentDesc() != null && !e.contentDesc().isBlank()) ? " content-desc=\"" + e.contentDesc().replace("\"", "'") + "\"" : "";
-
-        return "[" + id + "] bounds=" + e.bounds() + " clickable=" + e.clickable() + passwordFlag + classFlag
-                + textFlag + contentDescFlag
-                + " label=\"" + e.label().replace("\"", "'") + "\"";
+    // Geriye donuk uyumluluk icin -- goal'suz cagrilar hala calissin
+    private List<Elem> buildEmittedList(String rawPageSource) {
+        return buildEmittedList(rawPageSource, null);
     }
 
+    /**
+     * buildEmittedList'in budget'siz hali -- findMatchingTarget gibi "TUM elementleri
+     * kontrol et" gorevleri icin. Zenginlestirilmis etiket doner.
+     */
+    private List<Elem> buildEnrichedList(String rawPageSource) {
+        List<Elem> numbered = parseNumberedElements(rawPageSource);
+        List<Elem> allForContext = new ArrayList<>(numbered);
+        List<Elem> result = new ArrayList<>();
+        for (Elem e : numbered) {
+            String enriched = enrichImageLabel(e, allForContext);
+            if (enriched.equals(e.label())) {
+                result.add(e);
+            } else {
+                result.add(new Elem(enriched, e.bounds(), e.clickable(), e.isPassword(),
+                        e.className(), e.resourceId(), e.text(), e.contentDesc()));
+            }
+        }
+        return result;
+    }
+
+    private Set<String> extractKeywords(String goal) {
+        if (goal == null || goal.isBlank()) return Set.of();
+        String normalized = goal.toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-zçğıöşü0-9\\s]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        // HashSet -- Set.of() DUPLICATE eleman verildiginde "duplicate element" firlatir;
+        // daha once "adlı" iki kez eklenmisti ve her cagride patlamisti. HashSet sessiz tolere eder.
+        Set<String> stop = new HashSet<>(List.of(
+                "bir","ve","ile","için","bu","şu","o","adlı","olan","ürünü","ürünün","ürüne",
+                "tıkla","bul","git","yap","kontrol","et","ekle","aç","seç","sonra","önce",
+                "sayfası","sayfasına","sayfaya","ekranı","ekranına","ekran","test","yapmayı",
+                "dene","olduğunu","açıldığını","görselini","görseline","ürün","görsel"
+        ));
+        Set<String> keywords = new HashSet<>();
+        for (String w : normalized.split("\\s+")) {
+            if (w.length() >= 3 && !stop.contains(w)) {
+                keywords.add(w);
+            }
+        }
+        return keywords;
+    }
+
+    private int relevanceScore(Elem e, Set<String> keywords) {
+        StringBuilder hay = new StringBuilder();
+        if (e.label() != null) hay.append(e.label()).append(' ');
+        if (e.text() != null) hay.append(e.text()).append(' ');
+        if (e.contentDesc() != null) hay.append(e.contentDesc()).append(' ');
+        String lower = hay.toString().toLowerCase(Locale.ROOT);
+
+        int score = 0;
+        for (String k : keywords) {
+            if (lower.contains(k)) score += 10;
+        }
+        if (e.clickable()) score += 2;
+        return score;
+    }
+
+    // ============================================================================================
+    // enrichImageLabel -- esikler gevsetildi (2026-09-10)
+    //   - dx > 700 (liste satirlarinda gorsel solda, ad sagda olabilir)
+    //   - dist formulu dy agirlikli (ayni satirdaki urun icin dy kucuk olmali)
+    //   - minDist < 2500
+    // ============================================================================================
+    private String enrichImageLabel(Elem e, List<Elem> allElements) {
+        String label = e.label();
+        if (label == null || label.isBlank()) return label;
+        String lower = label.toLowerCase(Locale.ROOT);
+        if (!(lower.contains("image") || lower.contains("görsel") || lower.contains("resim")
+                || lower.contains("foto") || lower.contains("photo"))) {
+            return label;
+        }
+        int[] rect = parseBounds(e.bounds());
+        if (rect == null) return label;
+        int eCx = (rect[0] + rect[2]) / 2;
+        int eCy = (rect[1] + rect[3]) / 2;
+
+        Elem nearest = null;
+        long minDist = Long.MAX_VALUE;
+        for (Elem other : allElements) {
+            if (other == e) continue;
+            if (other.label().isBlank()) continue;
+            String oLower = other.label().toLowerCase(Locale.ROOT);
+            if (oLower.contains("image") || oLower.contains("görsel") || oLower.contains("resim")
+                    || oLower.contains("foto") || oLower.contains("photo")) continue;
+            if (oLower.startsWith("[id:")) continue;
+            if (oLower.matches(".*(sepete ekle|add to cart|kaldir|remove).*")) continue;
+            if (oLower.matches(".*[\\$€₺]\\s*\\d.*")) continue;
+            if (oLower.matches(".*\\d+[.,]\\d+.*")) continue;
+
+            int[] oRect = parseBounds(other.bounds());
+            if (oRect == null) continue;
+            int oCx = (oRect[0] + oRect[2]) / 2;
+            int oCy = (oRect[1] + oRect[3]) / 2;
+            long dx = Math.abs(eCx - oCx);
+            long dy = Math.abs(eCy - oCy);
+            if (dx > 700) continue;
+            long dist = dy * 3L + dx;
+            if (dist < minDist) {
+                minDist = dist;
+                nearest = other;
+            }
+        }
+        if (nearest != null && minDist < 2500) {
+            return label + " [urun: " + nearest.label() + "]";
+        }
+        return label;
+    }
+
+    // ============================================================================================
+    // formatLine -- sadeleştirilmiş format (2026-09-10)
+    //
+    // Eski: [3] bounds=[0,0][300,300] clickable=true class=ImageView text="Product Image" content-desc="Product Image" label="Product Image [urun: Sauce Labs Backpack (yellow)]"
+    // Yeni: [3] tıklanabilir "Product Image [urun: Sauce Labs Backpack (yellow)]" (ImageView)
+    //
+    // bounds ve tekrarli text/content-desc cikarildi; locator zaten XML'deki ham bounds'tan
+    // okuyor. Ayni CHAR_BUDGET icinde ~2.5x daha fazla element sigar.
+    // ============================================================================================
+    private String formatLine(int id, Elem e) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[").append(id).append("]");
+        if (e.clickable()) sb.append(" tıklanabilir");
+        if (e.isPassword()) sb.append(" şifre-alanı");
+        if (!e.label().isBlank()) {
+            sb.append(" \"").append(e.label().replace("\"", "'")).append("\"");
+        }
+        if (e.className() != null && !e.className().isBlank()) {
+            sb.append(" (").append(e.className()).append(")");
+        }
+        return sb.toString();
+    }
+
+    // ============================================================================================
+    // filterPageSource -- 2 overload
+    // ============================================================================================
     public String filterPageSource(String rawPageSource) {
+        return filterPageSource(rawPageSource, null);
+    }
+
+    public String filterPageSource(String rawPageSource, String goal) {
         if (rawPageSource == null) return "";
 
-        List<Elem> emitted = buildEmittedList(rawPageSource);
+        List<Elem> emitted = buildEmittedList(rawPageSource, goal);
         StringBuilder result = new StringBuilder();
         for (int i = 0; i < emitted.size(); i++) {
             result.append(formatLine(i + 1, emitted.get(i))).append("\n");
@@ -354,22 +554,32 @@ public class AppiumDriverManager {
         return result.toString();
     }
 
+    /**
+     * LLM'in gorebilecegi toplam element sayisi (goal-aware siralama ile ayni).
+     * RunController elementId validasyonunda kullanir: model "[200]" derse ve
+     * bu sayi 30 ise, ID uydurma tespit edilir.
+     */
+    public int countEmittableElements(String rawPageSource, String goal) {
+        if (rawPageSource == null) return 0;
+        return buildEmittedList(rawPageSource, goal).size();
+    }
+
     private Elem findUniqueElemByLabel(List<Elem> numbered, String targetLabel) {
         String target = targetLabel.trim();
-        String targetLower = target.toLowerCase();
+        String targetLower = target.toLowerCase(Locale.ROOT);
 
         Integer targetOccurrence = null;
         String targetBaseLower = targetLower;
         Matcher occMatcher = Pattern.compile("\\((\\d+)\\)\\s*$").matcher(target);
         if (occMatcher.find()) {
             targetOccurrence = Integer.parseInt(occMatcher.group(1));
-            targetBaseLower = target.substring(0, occMatcher.start()).trim().toLowerCase();
+            targetBaseLower = target.substring(0, occMatcher.start()).trim().toLowerCase(Locale.ROOT);
         }
 
         List<Elem> candidates = new ArrayList<>();
         for (Elem e : numbered) {
             if (e.label().isBlank()) continue;
-            String labelLower = e.label().toLowerCase();
+            String labelLower = e.label().toLowerCase(Locale.ROOT);
 
             String candidateBaseLower = labelLower;
             Integer candidateOccurrence = null;
@@ -396,7 +606,6 @@ public class AppiumDriverManager {
         return candidates.size() == 1 ? candidates.get(0) : null;
     }
 
-    // Geriye donuk uyumluluk icin birakildi -- asil cozum resolveTargetCenter uzerinden yapiliyor.
     public int[] findElementCenter(String rawPageSource, String targetLabel) {
         if (rawPageSource == null || targetLabel == null || targetLabel.isBlank()) return null;
         List<Elem> numbered = parseNumberedElements(rawPageSource);
@@ -405,29 +614,252 @@ public class AppiumDriverManager {
     }
 
     // ============================================================================================
-    // LOCATOR COZUMLEME
+    // STOPWORDS -- COK DILLI, HashSet tabanli (2026-09-10)
     //
-    // 3 kademeli:
+    // ONCEKI HATA: switch-case ile yazilmisti ve "olan" + "that" kelimeleri IKI KEZ gecmesi
+    // derleme hatasina yol aciyordu ("duplicate case label"). Simdi HashSet -- duplicate'leri
+    // SESSIZCE tolere eder, bu listeyi elle duzenlerken ayni hataya bir daha dusmeyiz.
+    //
+    // TASARIM ILKELERI:
+    //   (1) SADECE gramatik kelimeler (artikel, baglac, edat, zamir, yardimci fiil).
+    //   (2) SADECE genel arama fiilleri ("bul", "find", "click") -- bunlar hedef TANIMLAMAZ.
+    //   (3) ASLA: renk (violet), urun adi (backpack), marka (sauce), kategori (bike),
+    //       buton etiketi (add, cart, submit, login, save, remove) -- bunlar HEDEF sinyalidir.
+    //   (4) Liste KISA tutulur (~40/dil). Uzun liste = yanlis pozitif riski.
+    // ============================================================================================
+    private static final Set<String> STOP_WORDS = buildStopWords();
+
+    private static Set<String> buildStopWords() {
+        Set<String> w = new HashSet<>();
+
+        // ---- Turkce ----
+        Collections.addAll(w,
+                "bir","ve","ile","için","bu","şu","o","veya","ama","fakat","ki",
+                "olan","olarak","adlı","isimli","geçen","içeren",
+                "tıkla","tıklayın","bas","bul","bulun","ara","git","aç","seç","ekle",
+                "kontrol","et","dene","göster","listele","tamamla","doğrula","onayla"
+        );
+
+        // ---- English ----
+        Collections.addAll(w,
+                "the","a","an","and","or","but","if",
+                "in","on","at","to","of","with","for","from",
+                "this","that","is","are",
+                "click","tap","find","open","check","verify","navigate"
+        );
+
+        // ---- Deutsch ----
+        Collections.addAll(w,
+                "der","die","das","und","oder","aber",
+                "in","auf","mit","zu","für",
+                "klicken","suchen","finden","öffnen","prüfen"
+        );
+
+        // ---- Francais ----
+        Collections.addAll(w,
+                "le","la","les","et","ou","mais",
+                "dans","sur","avec","pour","vers",
+                "cliquer","chercher","trouver","ouvrir","vérifier"
+        );
+
+        // ---- Espanol ----
+        Collections.addAll(w,
+                "el","la","los","las","y","o","pero",
+                "en","con","por","para","sobre",
+                "clic","buscar","encontrar","abrir","verificar"
+        );
+
+        // ---- Italiano ----
+        Collections.addAll(w,
+                "il","lo","la","e","o","ma",
+                "in","con","per","su",
+                "clicca","cerca","trovare","aprire","verificare"
+        );
+
+        // ---- Portugues ----
+        Collections.addAll(w,
+                "o","a","os","as","e","ou","mas",
+                "em","com","para","sobre",
+                "clique","buscar","encontrar","abrir","verificar"
+        );
+
+        return Collections.unmodifiableSet(w);
+    }
+
+    private boolean isStopWord(String w) {
+        if (w == null) return true;
+        String t = w.toLowerCase(Locale.ROOT).trim();
+        return t.isEmpty() || STOP_WORDS.contains(t);
+    }
+
+    /**
+     * Hedef cumleden anlamli kelimeleri cikarir. Stopword'ler ve 3 karakterden kisa
+     * kelimeler atilir. DEFANSIF: hepsi filtrelendiyse en uzun kelime korunur.
+     */
+    private Set<String> extractContentWords(String text) {
+        if (text == null || text.isBlank()) return Set.of();
+        String normalized = text.toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-zçğıöşü0-9\\s]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        Set<String> raw = new LinkedHashSet<>();
+        for (String w : normalized.split("\\s+")) {
+            if (w.length() >= 3) raw.add(w);
+        }
+        Set<String> filtered = new HashSet<>();
+        for (String w : raw) {
+            if (!STOP_WORDS.contains(w)) filtered.add(w);
+        }
+        if (filtered.isEmpty()) {
+            String longest = raw.stream()
+                    .max(Comparator.comparingInt(String::length))
+                    .orElse(null);
+            if (longest != null) filtered.add(longest);
+        }
+        return filtered;
+    }
+
+    /**
+     * Hedef urun/eleman ekranda ZATEN var mi diye kontrol eder.
+     *
+     * YAKLASIM: 4 kademeli + IDF-benzeri puanlama
+     *   TIER 1: [urun: X] eki -- X goal'da TAM olarak geciyor (en guclu)
+     *   TIER 2: Duz etiket -- etiket goal'da TAM olarak geciyor
+     *   TIER 3: Ayirt edici kelime -- XML'de <=2 elementte gecen hedef kelimesi
+     *           (ör. "violet" gibi constraint'ler bu tier ile yakalanir)
+     *   TIER 4: 3+ ortak kelime (genel fallback)
+     *
+     * @return eslesen elementin etiketi, yoksa null
+     */
+    public String findMatchingTarget(String rawPageSource, String goal) {
+        if (rawPageSource == null || goal == null || goal.isBlank()) return null;
+
+        String goalLower = goal.toLowerCase(Locale.ROOT);
+        List<Elem> enriched = buildEnrichedList(rawPageSource);
+
+        Set<String> goalContentWords = extractContentWords(goal);
+        if (goalContentWords.isEmpty()) {
+            System.out.println("[findMatch] Goal'da anlamli kelime yok");
+            return null;
+        }
+
+        Map<String, Integer> keywordFrequency = new HashMap<>();
+        for (String kw : goalContentWords) {
+            int count = 0;
+            for (Elem e : enriched) {
+                if (e.label().toLowerCase(Locale.ROOT).contains(kw)) count++;
+            }
+            if (count > 0) keywordFrequency.put(kw, count);
+        }
+
+        System.out.println("[findMatch] goal=\"" + goal + "\"");
+        System.out.println("[findMatch] keyword frekanslari: " + keywordFrequency);
+
+        Pattern urunPattern = Pattern.compile("\\[urun:\\s*([^\\]]+)\\]");
+
+        Elem bestMatch = null;
+        int bestScore = 0;
+        String bestTier = null;
+
+        for (Elem e : enriched) {
+            String label = e.label();
+            String labelLower = label.toLowerCase(Locale.ROOT);
+            int score = 0;
+            String tier = null;
+
+            // TIER 1: [urun: X] eki goal'da geciyor
+            Matcher m = urunPattern.matcher(label);
+            if (m.find()) {
+                String productName = m.group(1).trim();
+                if (productName.length() >= 5
+                        && goalLower.contains(productName.toLowerCase(Locale.ROOT))) {
+                    score = productName.length() * 3 + 100;
+                    tier = "TIER-1";
+                }
+            }
+
+            // TIER 2: duz etiket goal'da geciyor
+            if (score == 0) {
+                String plain = label.replaceAll("\\s*\\(\\d+\\)\\s*$", "").trim();
+                if (plain.length() >= 8 && goalLower.contains(plain.toLowerCase(Locale.ROOT))) {
+                    long wc = 0;
+                    for (String w : plain.split("\\s+")) if (w.length() >= 3) wc++;
+                    if (wc >= 2) {
+                        score = plain.length() * 2 + 50;
+                        tier = "TIER-2";
+                    }
+                }
+            }
+
+            // TIER 3: ayirt edici kelime (IDF-dusuk)
+            if (score == 0) {
+                int distinctiveHits = 0;
+                int rareThreshold = 2;
+                for (String kw : goalContentWords) {
+                    Integer freq = keywordFrequency.get(kw);
+                    if (freq == null) continue;
+                    if (freq <= rareThreshold && labelLower.contains(kw)) {
+                        distinctiveHits++;
+                    }
+                }
+                if (distinctiveHits >= 1) {
+                    score = distinctiveHits * 80 + 30;
+                    tier = "TIER-3";
+                }
+            }
+
+            // TIER 4: 3+ ortak kelime
+            if (score == 0) {
+                int hits = 0;
+                for (String kw : goalContentWords) {
+                    if (keywordFrequency.containsKey(kw) && labelLower.contains(kw)) hits++;
+                }
+                if (hits >= 3) {
+                    score = hits * 12;
+                    tier = "TIER-4";
+                }
+            }
+
+            if (score > 0) {
+                if (e.clickable()) score += 8;
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = e;
+                    bestTier = tier;
+                }
+            }
+        }
+
+        if (bestMatch != null) {
+            System.out.println("[findMatch] " + bestTier + " \"" + bestMatch.label()
+                    + "\" (skor=" + bestScore + ")");
+            return bestMatch.label();
+        }
+
+        System.out.println("[findMatch] Hicbir tier eslesmedi");
+        return null;
+    }
+
+    // ============================================================================================
+    // LOCATOR COZUMLEME
     //   1) ID (elementId): model "[N]" numarasini secer, bounds merkezini biz hesaplariz.
     //   2) Etiket (target): serbest metin -> bulanik eslestirme.
-    //   3) XPath: bounds kullanilamiyorsa, canli uygulamada XPath ile yeniden ara.
-    //
-    // YENI: elementId clickable="false" bir elemente isaret ediyorsa, o elementi KAPSAYAN
-    // en kucuk clickable="true" ancestor'in merkezine tiklanir. Boylece "urun adi TextView'a
-    // tiklandi ama bir sey olmadi" sorunu cozulur.
+    //   3) XPath: canli uygulamada XPath ile yeniden ara.
+    // Non-clickable element icin clickable ancestor'a tiklama ozelligi dahil.
     // ============================================================================================
 
-    public int[] resolveTargetCenter(String runId, String rawPageSource, String elementId, String targetLabel) {
+    // 5 parametreli -- goal-aware siralama icin ZORUNLU
+    public int[] resolveTargetCenter(String runId, String rawPageSource, String elementId,
+                                     String targetLabel, String goal) {
         if (rawPageSource == null) return null;
 
         Elem byId = null;
         Integer id = parsePlainInt(elementId);
         if (id != null) {
-            List<Elem> emitted = buildEmittedList(rawPageSource);
+            List<Elem> emitted = buildEmittedList(rawPageSource, goal);
             if (id >= 1 && id <= emitted.size()) {
                 byId = emitted.get(id - 1);
 
-                // YENI: Clickable degilse, kapsayan clickable ancestor'i dene.
                 if (!byId.clickable()) {
                     int[] ancestorCenter = findClickableAncestorCenter(rawPageSource, byId.bounds());
                     if (ancestorCenter != null) {
@@ -441,7 +873,6 @@ public class AppiumDriverManager {
                 if (center != null) {
                     return center;
                 }
-                // ID gecerli ama bounds kullanilamiyor -- asagida XPath denenecek.
             }
         }
 
@@ -449,7 +880,6 @@ public class AppiumDriverManager {
         Elem byLabel = (targetLabel != null && !targetLabel.isBlank())
                 ? findUniqueElemByLabel(numbered, targetLabel) : null;
         if (byLabel != null) {
-            // Label ile bulunduysa da clickable kontrolu yapalim.
             if (!byLabel.clickable()) {
                 int[] ancestorCenter = findClickableAncestorCenter(rawPageSource, byLabel.bounds());
                 if (ancestorCenter != null) {
@@ -472,14 +902,11 @@ public class AppiumDriverManager {
         return null;
     }
 
-    /**
-     * Verilen child bounds'unu KAPSAYAN, clickable="true" olan elementler arasindan
-     * EN KUCUK alanli olanini bulup merkezini dondurur.
-     *
-     * XML'de parent-child hiyerarsisi duz Regex ile parse edilmedigi icin, "ancestor"
-     * kavramini bounds kapsama iliskisiyle taklit ediyoruz: child'i kapsayan ve
-     * clickable olan en kucuk element = en yakin clickable ancestor.
-     */
+    // Geriye donuk uyumluluk -- 4 parametreli cagrilar hala calissin
+    public int[] resolveTargetCenter(String runId, String rawPageSource, String elementId, String targetLabel) {
+        return resolveTargetCenter(runId, rawPageSource, elementId, targetLabel, null);
+    }
+
     private int[] findClickableAncestorCenter(String rawPageSource, String childBounds) {
         if (childBounds == null || rawPageSource == null) return null;
 
@@ -503,7 +930,6 @@ public class AppiumDriverManager {
             int[] rect = parseBounds(bounds);
             if (rect == null) continue;
 
-            // child'i KAPSAYAN mi?
             if (rect[0] <= childRect[0] && rect[1] <= childRect[1]
                     && rect[2] >= childRect[2] && rect[3] >= childRect[3]) {
                 long area = (long) (rect[2] - rect[0]) * (rect[3] - rect[1]);
@@ -562,42 +988,36 @@ public class AppiumDriverManager {
     }
 
     private String buildXPath(String rawPageSource, Elem e) {
-        // 1. resource-id
         if (e.resourceId() != null && !e.resourceId().isBlank()) {
             String lit = xpathLiteral(e.resourceId());
             if (lit != null && countOccurrences(rawPageSource, "resource-id=\"" + e.resourceId() + "\"") == 1) {
                 return "//*[@resource-id=" + lit + "]";
             }
         }
-        // 2. content-desc
         if (e.contentDesc() != null && !e.contentDesc().isBlank()) {
             String lit = xpathLiteral(e.contentDesc());
             if (lit != null && countOccurrences(rawPageSource, "content-desc=\"" + e.contentDesc() + "\"") == 1) {
                 return "//*[@content-desc=" + lit + "]";
             }
         }
-        // 3. text
         if (e.text() != null && !e.text().isBlank() && e.text().length() <= 80) {
             String lit = xpathLiteral(e.text());
             if (lit != null && countOccurrences(rawPageSource, "text=\"" + e.text() + "\"") == 1) {
                 return "//*[@text=" + lit + "]";
             }
         }
-        // 4. label
         if (e.label() != null && !e.label().isBlank() && e.label().length() <= 80) {
             String lit = xpathLiteral(e.label());
             if (lit != null && countOccurrences(rawPageSource, "label=\"" + e.label() + "\"") == 1) {
                 return "//*[@label=" + lit + "]";
             }
         }
-        // 5. resource-id + bounds
         if (e.resourceId() != null && !e.resourceId().isBlank()) {
             String lit = xpathLiteral(e.resourceId());
             if (lit != null) {
                 return "//*[@resource-id=" + lit + "][@bounds='" + e.bounds() + "']";
             }
         }
-        // 6. label + bounds
         if (e.label() != null && !e.label().isBlank()) {
             String lit = xpathLiteral(e.label());
             if (lit != null) {
@@ -720,7 +1140,6 @@ public class AppiumDriverManager {
             driver.perform(List.of(tap));
             System.out.println("[TAP] Tap tamamlandı");
 
-            // UI stabilize
             Thread.sleep(500);
 
         } catch (InterruptedException e) {
@@ -733,31 +1152,9 @@ public class AppiumDriverManager {
     }
 
     /**
-     * ONEMLI (2026-09-10 duzeltmesi): "direction" artik EKRANIN/ICERIGIN GORSEL OLARAK hangi
-     * yone kaydigini ifade ediyor -- parmagin fiziksel hareketini DEGIL. Yani direction="down"
-     * dedigimde EKRAN GERCEKTEN ASAGI kayar (listede DAHA SONRAKI/ALTTAKI ogeler gorunur).
-     *
-     * ONCEKI (HATALI) DAVRANIS: direction parametresi PARMAK hareketini ifade ediyordu
-     * (direction="up" -> parmak yukari -> icerik asagi kayar -> BU YUZDEN aslinda "asagi
-     * kaydirma" anlamina geliyordu, direction="down" ise tam TERSINE "yukari kaydirma"
-     * anlamina geliyordu). Bu ters/sezgiye aykiri esleme, kod icinde EN AZ 3 farkli yerde
-     * (RunController.AUTO_SCROLL_DIRECTIONS dizisi, LlmAgent'teki eski "bul" ipucu, ve
-     * turkishDirection() etiketleri) birbirinden BAGIMSIZ olarak YANLIS kullanilmasina yol
-     * acmisti -- cunku "down" yazan biri dogal olarak "ekrani asagi kaydir" bekliyordu, kod ise
-     * "parmagi asagi hareket ettir" (yani ekrani YUKARI kaydir) yapiyordu. Simdi direction
-     * degeri SEZGISEL anlamiyla (ekranin/icerigin GORUNEN kayma yonu) tanimlaniyor, parmak
-     * hareketi sadece bunun bir UYGULAMA DETAYI -- disaridan (LLM promptu, otomatik kaydirma
-     * dizisi, log mesajlari) hep sezgisel/dogal anlamla kullanilabiliyor.
-     *
-     *   direction="down"  -> EKRANI ASAGI kaydir -> listede SONRAKI/ALTTAKI ogeler gorunur
-     *                        (parmak bunun icin YUKARI hareket eder: startY yuksek -> endY dusuk)
-     *   direction="up"    -> EKRANI YUKARI kaydir -> listede ONCEKI/USTTEKI ogeler gorunur
-     *                        (parmak bunun icin ASAGI hareket eder: startY dusuk -> endY yuksek)
-     *   direction="right" -> EKRANI SAGA kaydir -> SONRAKI/SAGDAKI ogeler gorunur (yatay)
-     *   direction="left"  -> EKRANI SOLA kaydir -> ONCEKI/SOLDAKI ogeler gorunur (yatay)
-     *
-     * Varsayilan (null/bilinmeyen): "down" -- en sik ihtiyac duyulan yon (bir liste ekraninda
-     * henuz gorunmeyen SONRAKI ogeleri aramak icin).
+     * direction EKRANIN/ICERIGIN GORSEL OLARAK hangi yone kaydigini ifade ediyor:
+     *   direction="down"  -> EKRANI ASAGI kaydir -> SONRAKI/ALTTAKI ogeler gorunur
+     *   direction="up"    -> EKRANI YUKARI kaydir -> ONCEKI/USTTEKI ogeler gorunur
      */
     public void swipe(String runId, String direction) {
         AppiumDriver driver = driverFor(runId);
@@ -769,35 +1166,30 @@ public class AppiumDriverManager {
 
         switch (direction == null ? "" : direction.toLowerCase()) {
             case "down" -> {
-                // Ekrani asagi kaydir (sonraki/alttaki ogeler) -> parmak YUKARI hareket eder
                 startX = width / 2;
                 startY = (int) (height * 0.7);
                 endX = width / 2;
                 endY = (int) (height * 0.2);
             }
             case "up" -> {
-                // Ekrani yukari kaydir (onceki/ustteki ogeler) -> parmak ASAGI hareket eder
                 startX = width / 2;
                 startY = (int) (height * 0.2);
                 endX = width / 2;
                 endY = (int) (height * 0.7);
             }
             case "right" -> {
-                // Ekrani saga kaydir (sonraki/sagdaki ogeler, yatay) -> parmak SOLA hareket eder
                 startX = (int) (width * 0.8);
                 startY = height / 2;
                 endX = (int) (width * 0.2);
                 endY = height / 2;
             }
             case "left" -> {
-                // Ekrani sola kaydir (onceki/soldaki ogeler, yatay) -> parmak SAGA hareket eder
                 startX = (int) (width * 0.2);
                 startY = height / 2;
                 endX = (int) (width * 0.8);
                 endY = height / 2;
             }
             default -> {
-                // Varsayilan: ekrani asagi kaydir (sonraki ogeler) -> parmak yukari hareket eder
                 startX = width / 2;
                 startY = (int) (height * 0.7);
                 endX = width / 2;
@@ -815,13 +1207,16 @@ public class AppiumDriverManager {
         swipe.addAction(finger.createPointerMove(Duration.ZERO,
                 PointerInput.Origin.viewport(), startX, startY));
         swipe.addAction(finger.createPointerDown(PointerInput.MouseButton.LEFT.asArg()));
-        swipe.addAction(finger.createPointerMove(Duration.ofMillis(500),
+        swipe.addAction(finger.createPointerMove(Duration.ofMillis(600),
                 PointerInput.Origin.viewport(), endX, endY));
         swipe.addAction(finger.createPointerUp(PointerInput.MouseButton.LEFT.asArg()));
         driver.perform(List.of(swipe));
 
+        // [DUZELTME 2026-09-10] 500ms -> 1500ms. Onceki degerde UI tam oturmadan
+        // getPageSource() cagriliyordu -- yeni XML gelmedigi icin model eski ekrani gorup
+        // ayni karari tekrar veriyordu.
         try {
-            Thread.sleep(500);
+            Thread.sleep(1500);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -856,14 +1251,32 @@ public class AppiumDriverManager {
         }
     }
 
+    // ============================================================================================
+    // invalidateSession -- DÜZELTİLDİ (2026-09-10)
+    //
+    // ÖNCEKİ: Sadece map'ten siliyordu, quit() ÇAĞIRMIYORDU -> Appium server'da orphan
+    // session kaliyordu. Yeni session acildiginda ayni cihaza bagli 2 Appium oturumu
+    // olusuyordu.
+    // ============================================================================================
     public void invalidateSession(String runId) {
-        drivers.remove(runId);
+        AppiumDriver driver = drivers.remove(runId);
+        if (driver == null) return;
+        try {
+            driver.quit();
+            System.out.println("[session] invalidate -> quit() başarılı");
+        } catch (Exception e) {
+            System.out.println("[session] invalidate -> quit() başarısız (görmezden gelindi): " + e.getMessage());
+        }
     }
 
     public void stopSession(String runId) {
         AppiumDriver driver = drivers.remove(runId);
         if (driver != null) {
-            driver.quit();
+            try {
+                driver.quit();
+            } catch (Exception e) {
+                System.out.println("[session] stopSession quit() uyarısı: " + e.getMessage());
+            }
         }
     }
 

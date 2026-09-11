@@ -6,97 +6,109 @@
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- 1) RUNS — Run.java'nın karşılığı. Her test koşumunun ana kaydı.
+-- 1) MOBILE_RUNS — Run.java'nın karşılığı. Her test koşumunun ana kaydı.
 -- ----------------------------------------------------------------------------
-CREATE TABLE RUNS (
+CREATE TABLE MOBILE_RUNS (
     ID                   VARCHAR2(36)                  NOT NULL,  -- Java UUID.randomUUID().toString(), aynen korunuyor
-    GOAL                 VARCHAR2(1000)                NOT NULL,  -- kullanıcının Türkçe test hedefi (örn. "giriş yap")
+    NAME                 VARCHAR2(255),                           -- test adı
+    GOAL                 CLOB                        NOT NULL,    -- kullanıcının Türkçe test hedefi (örn. "giriş yap")
     STATUS               VARCHAR2(20)                  NOT NULL,  -- running | passed | failed | error | stopped
     ERROR                CLOB,                                    -- LLM/Appium hata mesajı; gözlemde 2000+ karaktere çıkıyor, VARCHAR2(4000) byte limitini riske atmamak için CLOB
     STARTED_AT           TIMESTAMP(6) WITH TIME ZONE   NOT NULL,  -- Instant.now() -> artık string değil, gerçek TIMESTAMP
     FINISHED_AT          TIMESTAMP(6) WITH TIME ZONE,
-    STOP_REQUESTED       NUMBER(1)     DEFAULT 0       NOT NULL,  -- Oracle'da native BOOLEAN yoksa (pre-23c) 0/1 kullanılır
     APP_PACKAGE          VARCHAR2(255),                           -- örn. com.saucelabs.SwagLabsMobileApp
     APP_ACTIVITY         VARCHAR2(255),                           -- örn. com.hepsiburada.ui.startup.SplashActivity
     PLATFORM             VARCHAR2(20),                            -- ios | android
-    NIGHTLY_SUITE        NUMBER(1)     DEFAULT 0       NOT NULL,
+    VARIABLES_JSON       CLOB,                                    -- Map<String,String> JSON olarak
     CAPTURE_SCREENSHOT   NUMBER(1)     DEFAULT 0       NOT NULL,
     RECORD_VIDEO         NUMBER(1)     DEFAULT 0       NOT NULL,
     HAS_VIDEO            NUMBER(1)     DEFAULT 0       NOT NULL,
-    FAILURE_SCREENSHOT   BLOB,                                    -- ÖNERİ: AppiumDriverManager.takeScreenshotBase64()'ten gelen
-                                                                   -- base64 string DECODE edilip ham binary (PNG) olarak burada
-                                                                   -- tutulmalı. Base64 metni aynen saklamak istersen BLOB yerine
-                                                                   -- CLOB kullan, ama BLOB hem ~%33 yer kazandırır hem doğru tip olur.
-    CONSTRAINT PK_RUNS PRIMARY KEY (ID),
-    CONSTRAINT CK_RUNS_STATUS   CHECK (STATUS IN ('running','passed','failed','error','stopped')),
-    CONSTRAINT CK_RUNS_PLATFORM CHECK (PLATFORM IN ('ios','android'))
+    HAS_FAILURE_SCREENSHOT NUMBER(1)   DEFAULT 0       NOT NULL,
+    FAILURE_SCREENSHOT_BASE64 CLOB,                               -- base64 PNG verisi
+    NIGHTLY_SUITE        NUMBER(1)     DEFAULT 0       NOT NULL,
+    NIGHTLY_RUN          NUMBER(1)     DEFAULT 0       NOT NULL,
+    PROJECT_ID           NUMBER(10),
+    PROJECT_NAME         VARCHAR2(255),
+    CREATED_BY           VARCHAR2(255),
+    SUITE_RUN_AT         TIMESTAMP(6) WITH TIME ZONE,
+    SUITE_RUN_SUITE_ID   NUMBER(10),
+    SUITE_RUN_SUITE_NAME VARCHAR2(255),
+    CONSTRAINT PK_MOBILE_RUNS PRIMARY KEY (ID),
+    CONSTRAINT CK_MOBILE_RUNS_STATUS   CHECK (STATUS IN ('running','passed','failed','error','stopped')),
+    CONSTRAINT CK_MOBILE_RUNS_PLATFORM CHECK (PLATFORM IN ('ios','android'))
 );
 
-COMMENT ON TABLE RUNS IS 'Her test kosumunun (Run.java) tum durumu';
-COMMENT ON COLUMN RUNS.FAILURE_SCREENSHOT IS 'Appium screenshot; hata aninda captureScreenshot=true ise doldurulur';
+COMMENT ON TABLE MOBILE_RUNS IS 'Her test kosumunun (Run.java) tum durumu';
+COMMENT ON COLUMN MOBILE_RUNS.FAILURE_SCREENSHOT_BASE64 IS 'Appium screenshot; hata aninda captureScreenshot=true ise doldurulur';
 
 -- ----------------------------------------------------------------------------
--- 2) RUN_STEPS — RunStep.java'nın karşılığı. 1 Run -> N Step.
+-- 2) MOBILE_RUN_STEPS — RunStep.java'nın karşılığı. 1 Run -> N Step.
 -- ----------------------------------------------------------------------------
-CREATE TABLE RUN_STEPS (
-    STEP_ID       NUMBER          GENERATED ALWAYS AS IDENTITY,
+CREATE SEQUENCE MOBILE_RUN_STEPS_SEQ START WITH 1 INCREMENT BY 1;
+
+CREATE TABLE MOBILE_RUN_STEPS (
+    STEP_ID       NUMBER          GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME MOBILE_RUN_STEPS_SEQ),
     RUN_ID        VARCHAR2(36)    NOT NULL,
     STEP_NO       NUMBER(3)       NOT NULL,             -- RunStep.step (1..MAX_STEPS=15)
     ACTION        VARCHAR2(20)    NOT NULL,             -- tap | type | swipe | wait | done | fail | failed
     TARGET        VARCHAR2(500),                        -- hedeflenen elementin insan-okunur açıklaması
     REASONING     CLOB,                                 -- LLM'in bu adımı neden seçtiğinin gerekçesi (SYSTEM_PROMPT'taki "reasoning")
-    CONSTRAINT PK_RUN_STEPS PRIMARY KEY (STEP_ID),
-    CONSTRAINT UQ_RUN_STEPS UNIQUE (RUN_ID, STEP_NO),
-    CONSTRAINT FK_RUN_STEPS_RUN FOREIGN KEY (RUN_ID) REFERENCES RUNS(ID) ON DELETE CASCADE
+    CONSTRAINT PK_MOBILE_RUN_STEPS PRIMARY KEY (STEP_ID),
+    CONSTRAINT UQ_MOBILE_RUN_STEPS UNIQUE (RUN_ID, STEP_NO),
+    CONSTRAINT FK_MOBILE_RUN_STEPS_RUN FOREIGN KEY (RUN_ID) REFERENCES MOBILE_RUNS(ID) ON DELETE CASCADE
 );
 
-COMMENT ON TABLE RUN_STEPS IS 'Bir Run icindeki her adim (RunStep.java) - LLM in aksiyon kararlari dahil';
+COMMENT ON TABLE MOBILE_RUN_STEPS IS 'Bir Run icindeki her adim (RunStep.java) - LLM in aksiyon kararlari dahil';
 
 -- ----------------------------------------------------------------------------
--- 3) RUN_SUGGESTIONS — ScenarioSuggestion.java'nın karşılığı. 1 Run -> N Suggestion.
+-- 3) MOBILE_RUN_SUGGESTIONS — ScenarioSuggestion.java'nın karşılığı. 1 Run -> N Suggestion.
 --    (LlmAgent.suggestScenarios / suggestScenariosForPage çıktısı)
 -- ----------------------------------------------------------------------------
-CREATE TABLE RUN_SUGGESTIONS (
-    SUGGESTION_ID  NUMBER          GENERATED ALWAYS AS IDENTITY,
+CREATE SEQUENCE MOBILE_RUN_SUGGESTIONS_SEQ START WITH 1 INCREMENT BY 1;
+
+CREATE TABLE MOBILE_RUN_SUGGESTIONS (
+    SUGGESTION_ID  NUMBER          GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME MOBILE_RUN_SUGGESTIONS_SEQ),
     RUN_ID         VARCHAR2(36)    NOT NULL,
     SENARYO        VARCHAR2(2000)  NOT NULL,            -- kısa Türkçe test cümlesi
-    KATEGORI       VARCHAR2(50),                        -- bkz. CK_RUN_SUGG_KATEGORI
+    KATEGORI       VARCHAR2(50),                        -- bkz. CK_MOBILE_RUN_SUGG_KATEGORI
     SAYFA          VARCHAR2(255),                       -- senaryonun ilgili olduğu ekran/sayfa
     NEDEN          VARCHAR2(2000),                      -- neden test edilmeye değer olduğunun gerekçesi
-    CONSTRAINT PK_RUN_SUGGESTIONS PRIMARY KEY (SUGGESTION_ID),
-    CONSTRAINT FK_RUN_SUGG_RUN FOREIGN KEY (RUN_ID) REFERENCES RUNS(ID) ON DELETE CASCADE,
-    CONSTRAINT CK_RUN_SUGG_KATEGORI CHECK (KATEGORI IN (
+    CONSTRAINT PK_MOBILE_RUN_SUGGESTIONS PRIMARY KEY (SUGGESTION_ID),
+    CONSTRAINT FK_MOBILE_RUN_SUGG_RUN FOREIGN KEY (RUN_ID) REFERENCES MOBILE_RUNS(ID) ON DELETE CASCADE,
+    CONSTRAINT CK_MOBILE_RUN_SUGG_KATEGORI CHECK (KATEGORI IN (
         'Negatif Test','Sınır Durumu','Gezinme Çeşitliliği','UX/Durum Kontrolü','Performans','Erişilebilirlik'
     ))
 );
 
-COMMENT ON TABLE RUN_SUGGESTIONS IS 'AI tarafindan onerilen ek test senaryolari (ScenarioSuggestion.java)';
+COMMENT ON TABLE MOBILE_RUN_SUGGESTIONS IS 'AI tarafindan onerilen ek test senaryolari (ScenarioSuggestion.java)';
 
 -- ----------------------------------------------------------------------------
--- 4) RUN_VARIABLES — Run.variables / TestRequest.variables (Map<String,String>)
+-- 4) MOBILE_RUN_VARIABLES — Run.variables / TestRequest.variables (Map<String,String>)
 --    normalize edilmiş hali. 1 Run -> N Variable.
 -- ----------------------------------------------------------------------------
-CREATE TABLE RUN_VARIABLES (
+CREATE TABLE MOBILE_RUN_VARIABLES (
     RUN_ID     VARCHAR2(36)   NOT NULL,
     VAR_KEY    VARCHAR2(100)  NOT NULL,                 -- örn. "mail", "sifre"
     VAR_VALUE  VARCHAR2(1000),                          -- örn. "standard_user"
-    CONSTRAINT PK_RUN_VARIABLES PRIMARY KEY (RUN_ID, VAR_KEY),
-    CONSTRAINT FK_RUN_VARIABLES_RUN FOREIGN KEY (RUN_ID) REFERENCES RUNS(ID) ON DELETE CASCADE
+    CONSTRAINT PK_MOBILE_RUN_VARIABLES PRIMARY KEY (RUN_ID, VAR_KEY),
+    CONSTRAINT FK_MOBILE_RUN_VARIABLES_RUN FOREIGN KEY (RUN_ID) REFERENCES MOBILE_RUNS(ID) ON DELETE CASCADE
 );
 
-COMMENT ON TABLE RUN_VARIABLES IS 'Run.variables Map alaninin normalize edilmis hali (test degiskenleri)';
+COMMENT ON TABLE MOBILE_RUN_VARIABLES IS 'Run.variables Map alaninin normalize edilmis hali (test degiskenleri)';
 
 -- ----------------------------------------------------------------------------
--- 5) NIGHTLY_SETTINGS — NightlySuiteScheduler'daki hour/minute (şu an in-memory
+-- 5) MOBILE_NIGHTLY_SETTINGS — NightlySuiteScheduler'daki hour/minute (şu an in-memory
 --    AtomicInteger). Kalıcı olmasını istersen tek satırlık config tablosu.
 -- ----------------------------------------------------------------------------
-CREATE TABLE NIGHTLY_SETTINGS (
+CREATE TABLE MOBILE_NIGHTLY_SETTINGS (
     ID       NUMBER(1)  DEFAULT 1 NOT NULL,             -- her zaman 1, tek satır
     HOUR     NUMBER(2)  DEFAULT 2 NOT NULL,
     MINUTE   NUMBER(2)  DEFAULT 0 NOT NULL,
-    CONSTRAINT PK_NIGHTLY_SETTINGS PRIMARY KEY (ID),
-    CONSTRAINT CK_NIGHTLY_SETTINGS_ID CHECK (ID = 1)
+    CONSTRAINT PK_MOBILE_NIGHTLY_SETTINGS PRIMARY KEY (ID),
+    CONSTRAINT CK_MOBILE_NIGHTLY_SETTINGS_ID CHECK (ID = 1)
 );
+
+COMMENT ON TABLE MOBILE_NIGHTLY_SETTINGS IS 'Gece koşumu zaman ayarları (tek satır, ID=1)';
 
 -- ----------------------------------------------------------------------------
 -- 6) MOBILE_LDAP_SETTINGS — LDAP yapılandırması (LdapSettings.java)
@@ -122,25 +134,26 @@ COMMENT ON COLUMN MOBILE_LDAP_SETTINGS.MANAGER_PASSWORD_ENCRYPTED IS 'AES ile ş
 COMMENT ON COLUMN MOBILE_LDAP_SETTINGS.PASSWORD_ENCODER_TYPE IS 'Kullanıcı şifreleme algoritması (bcrypt, sha256, etc.)';
 
 -- ----------------------------------------------------------------------------
--- 7) APP_USERS — Uygulama kullanıcıları (AppUser.java)
+-- 7) MOBILE_APP_USERS — Uygulama kullanıcıları (AppUser.java)
 -- ----------------------------------------------------------------------------
-CREATE TABLE APP_USERS (
-    ID               NUMBER(10) GENERATED ALWAYS AS IDENTITY,
+CREATE SEQUENCE MOBILE_APP_USERS_SEQ START WITH 1 INCREMENT BY 1;
+
+CREATE TABLE MOBILE_APP_USERS (
+    ID               NUMBER(10) GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME MOBILE_APP_USERS_SEQ),
     USERNAME         VARCHAR2(100)  NOT NULL,
     PASSWORD_HASH    VARCHAR2(1000),
-    ROLE             VARCHAR2(50)   NOT NULL,
-    SOURCE           VARCHAR2(50)   NOT NULL,
-    CREATED_AT       TIMESTAMP(6)   DEFAULT CURRENT_TIMESTAMP,
-    UPDATED_AT       TIMESTAMP(6)   DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT PK_APP_USERS PRIMARY KEY (ID),
-    CONSTRAINT UQ_APP_USERS_USERNAME UNIQUE (USERNAME),
-    CONSTRAINT CK_APP_USERS_SOURCE CHECK (SOURCE IN ('LOCAL', 'LDAP')),
-    CONSTRAINT CK_APP_USERS_ROLE CHECK (ROLE IN ('ADMIN', 'USER', 'SUPERADMIN'))
+    ROLE             VARCHAR2(20)   NOT NULL,
+    SOURCE           VARCHAR2(20)   NOT NULL,
+    CREATED_AT       TIMESTAMP(6)   DEFAULT CURRENT_TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT PK_MOBILE_APP_USERS PRIMARY KEY (ID),
+    CONSTRAINT UQ_MOBILE_APP_USERS_USERNAME UNIQUE (USERNAME),
+    CONSTRAINT CK_MOBILE_APP_USERS_SOURCE CHECK (SOURCE IN ('LOCAL', 'LDAP')),
+    CONSTRAINT CK_MOBILE_APP_USERS_ROLE CHECK (ROLE IN ('ADMIN', 'USER', 'SUPERADMIN'))
 );
 
-COMMENT ON TABLE APP_USERS IS 'Uygulama kullanıcıları (yerel ve LDAP)';
-COMMENT ON COLUMN APP_USERS.PASSWORD_HASH IS 'LOCAL kullanıcılar için BCrypt hash, LDAP kullanıcıları için NULL';
-COMMENT ON COLUMN APP_USERS.SOURCE IS 'Kullanıcı kaynağı: LOCAL (manuel) veya LDAP';
+COMMENT ON TABLE MOBILE_APP_USERS IS 'Uygulama kullanıcıları (yerel ve LDAP)';
+COMMENT ON COLUMN MOBILE_APP_USERS.PASSWORD_HASH IS 'LOCAL kullanıcılar için BCrypt hash, LDAP kullanıcıları için NULL';
+COMMENT ON COLUMN MOBILE_APP_USERS.SOURCE IS 'Kullanıcı kaynağı: LOCAL (manuel) veya LDAP';
 
 -- ----------------------------------------------------------------------------
 -- 8) APP_SETTINGS — Uygulama genel ayarları (AppSettings.java)
@@ -164,11 +177,11 @@ COMMENT ON COLUMN APP_SETTINGS.MAX_STEPS IS 'Bir test koşumunda maksimum adım 
 -- İndeksler — RunController.listRuns() startedAt'e göre sıralıyor,
 -- RunController/NightlySuiteScheduler status ve nightlySuite'e göre filtreliyor.
 -- ----------------------------------------------------------------------------
-CREATE INDEX IX_RUNS_STARTED_AT ON RUNS(STARTED_AT);
-CREATE INDEX IX_RUNS_STATUS     ON RUNS(STATUS);
-CREATE INDEX IX_RUNS_NIGHTLY    ON RUNS(NIGHTLY_SUITE);
-CREATE INDEX IX_RUN_STEPS_RUN   ON RUN_STEPS(RUN_ID);
-CREATE INDEX IX_RUN_SUGG_RUN    ON RUN_SUGGESTIONS(RUN_ID);
+CREATE INDEX IX_MOBILE_RUNS_STARTED_AT ON MOBILE_RUNS(STARTED_AT);
+CREATE INDEX IX_MOBILE_RUNS_STATUS     ON MOBILE_RUNS(STATUS);
+CREATE INDEX IX_MOBILE_RUNS_NIGHTLY    ON MOBILE_RUNS(NIGHTLY_SUITE);
+CREATE INDEX IX_MOBILE_RUN_STEPS_RUN   ON MOBILE_RUN_STEPS(RUN_ID);
+CREATE INDEX IX_MOBILE_RUN_SUGG_RUN    ON MOBILE_RUN_SUGGESTIONS(RUN_ID);
 
 -- ============================================================================
 -- NOTLAR

@@ -61,19 +61,19 @@ public class RunEntity {
     @Column(name = "variables_json")
     private String variablesJson;
 
-    @Column(name = "capture_screenshot")
+    @Column(name = "capture_screenshot", columnDefinition = "NUMBER(1)")
     private boolean captureScreenshot;
 
-    @Column(name = "record_video")
+    @Column(name = "record_video", columnDefinition = "NUMBER(1)")
     private boolean recordVideo;
 
-    @Column(name = "has_video")
+    @Column(name = "has_video", columnDefinition = "NUMBER(1)")
     private boolean hasVideo;
 
     // Onceki mesajda konustugumuz gibi: ekran goruntusunun base64 icerigi DB'ye
     // girmiyor, video gibi dosya sistemine yaziliyor (screenshots/<id>.png) --
     // burada sadece "var mi yok mu" tutuluyor.
-    @Column(name = "has_failure_screenshot")
+    @Column(name = "has_failure_screenshot", columnDefinition = "NUMBER(1)")
     private boolean hasFailureScreenshot;
 
     // JSON dosyasini kapatinca (5. adim) ekran goruntusunun tek kopyasi burasi
@@ -85,10 +85,10 @@ public class RunEntity {
     @Column(name = "failure_screenshot_base64")
     private String failureScreenshotBase64;
 
-    @Column(name = "nightly_suite")
+    @Column(name = "nightly_suite", columnDefinition = "NUMBER(1)")
     private boolean nightlySuite;
 
-    @Column(name = "nightly_run")
+    @Column(name = "nightly_run", columnDefinition = "NUMBER(1)")
     private boolean nightlyRun;
 
     @Column(name = "project_id")

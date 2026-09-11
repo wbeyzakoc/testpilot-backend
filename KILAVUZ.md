@@ -10,7 +10,7 @@ Kısa pratik bilgilendirme: backend, frontend ve Appium/Device Farm nasıl ayağ
   cd ai-auto-testing-backend/backend
   mvn spring-boot:run
   ```
-- Varsayılan port: **4000** (`application.properties` → `server.port`)
+- Varsayılan port: **8080** (`application.properties` → `server.port`)
 - Veritabanı: Oracle (`jdbc:oracle:thin:@localhost:1521/FREEPDB1`, kullanıcı `testpilotapp`)
 - `spring.jpa.hibernate.ddl-auto`: yeni tablo/kolon eklendiğinde (migration) geçici olarak `update` yapılır, Hibernate otomatik oluşturduktan sonra tekrar `none`/`validate`'e döndürülür — DB'yi olduğu gibi korumak için varsayılan hep `none`/`validate` olmalı.
 
@@ -21,7 +21,7 @@ Kısa pratik bilgilendirme: backend, frontend ve Appium/Device Farm nasıl ayağ
   cd cozy-creatorr
   npm run dev
   ```
-- Terminalde basılan adresten açılır (Vite dev server). Backend'e `http://localhost:4000` üzerinden bağlanır (bkz. `AGENT_API_URL` sabiti, route dosyalarının başında).
+- Terminalde basılan adresten açılır (Vite dev server). Backend'e `http://localhost:8080` üzerinden bağlanır (bkz. `AGENT_API_URL` sabiti, route dosyalarının başında).
 
 ## Appium / Device Farm
 

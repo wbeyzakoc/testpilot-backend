@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.3.4</version>
+        <version>3.5.5</version>
         <relativePath/>
     </parent>
 
@@ -17,7 +17,9 @@
     <name>ai-auto-testing-backend</name>
 
     <properties>
-        <java.version>17</java.version>
+        <!-- Run with JDK 25, but keep bytecode compatible with Spring's ASM scanner. -->
+        <java.version>25</java.version>
+        <maven.compiler.release>21</maven.compiler.release>
     </properties>
 
     <dependencies>
