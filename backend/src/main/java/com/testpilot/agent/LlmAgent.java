@@ -15,11 +15,17 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 import java.util.concurrent.TimeUnit;
 
 @Component
 public class LlmAgent {
+
+    private static final Pattern EXPLICIT_TEXT_INPUT = Pattern.compile(
+            "(?iu)(^|[^\\p{L}])(yaz|yazın|yazınız|gir|girin|doldur|doldurun|type|enter)([^\\p{L}]|$)"
+    );
 
     // api-key ve model artık application.properties'ten @Value ile DEĞİL,
     // AppSettingsService üzerinden veritabanından (panelden yönetilen) okunuyor.
@@ -122,13 +128,31 @@ public class LlmAgent {
             - target: elementin kısa açıklaması ("Login butonu", "Sepet ikonu")
             - elementId: XML'deki [N] numarası, SADECE rakam, GERÇEK olmalı (uydurma YASAK)
             - action=tap: elementId zorunlu. Buton/ikon/kart gibi metin almayan elementler için
-            - action=type: elementId + text zorunlu. Yazı girilebilen HER alan için SADECE type
+                        - action=type: elementId + text zorunlu. SADECE hedef açıkça metin girme istiyorsa kullan.
+                            Hedefte "yaz", "gir", "doldur", "type" veya "enter" gibi açık bir talimat yoksa
+                            action=type KULLANMA.
             - action=swipe: direction zorunlu (down|up|left|right)
             - action=wait: yüklemeyi bekle
             - action=done: hedef TAMAMEN bittiğinde
             - action=fail: gerçekten çıkmaz sokakta
 
             İlk adımda (adım 1): her zaman action="wait" döndür.
+
+            ==================================================
+            🔴 KURAL 0: SENARYO DIŞINA ÇIKMA VE AKSİYON FİİLİNE UY
+            ==================================================
+            Her aksiyonun anlamını hedef cümlesindeki fiilden çıkar:
+            - "tıkla", "bas", "seç", "dokun", "aç" → SADECE action="tap"
+            - "yaz", "gir", "doldur", "type", "enter" → action="type"
+            - "kaydır", "scroll" → action="swipe"
+            - "bekle" → action="wait"
+
+            Hedef "standart_user yazısına tıkla" ise standart_user bir seçimdir:
+            input alanı gibi görünse bile action="tap" döndür. Kullanıcı adı veya şifre
+            alanına kendiliğinden yazma, alanları kendiliğinden doldurma, login akışını
+            varsayma ve hedefte olmayan hiçbir aksiyonu ekleme.
+            Hedef açıkça metin girme istemiyorsa, test değişkenleri mevcut olsa bile
+            onları forma yazma. Her turda yalnızca hedefteki İLK TAMAMLANMAMIŞ adıma odaklan.
 
             ==================================================
             🔴 KURAL 1: BUTON METNİ DEĞİŞİKLİĞİ = BAŞARI KANITI
@@ -148,21 +172,49 @@ public class LlmAgent {
               4. Değilse → hedefin SIRADAKİ kısmına odaklan (ör. sepet ikonuna tıkla).
 
             ==================================================
-            🔴 KURAL 2: JENERİK HEDEF vs SPESİFİK HEDEF
-            ==================================================
-            Hedefi iki kategoriye ayır:
+            🔴 KURAL 2: HEDEF ANALİZİ VE DETAYLI ARAMA STRATEJİSİ
+            ============================================================
+            HER hedef için şu analizi yap:
 
-            (A) SPESİFİK hedef — belirli ürün/element adı verilmiş:
+            ADIM 1 - HEDEF KATEGORİSİ:
+            (A) SPESİFİK hedef — belirli ürün/element adı, renk, model verilmiş:
                 "Sauce Labs Backpack (yellow) adlı ürünü sepete ekle"
-                → SADECE o ürünü ekle, başka ürüne dokunma.
+                "yellow yazan ürünü seç"
+                "iPhone 15 modelini bul"
+                "mavi renkli ürünü ekle"
+                → SADECE o ürünü bul ve seç, başka ürüne dokunma
+                → DETAYLI ARAMA ve KAYDIRMA ZORUNLUDUR
 
-            (B) JENERİK hedef — ürün adı verilmemiş:
+            (B) JENERİK hedef — ürün adı verilmemiş, genel işlem:
                 "ürünü sepete ekle", "bir ürün ekle", "herhangi bir ürün"
-                → Ekranda GÖRÜNEN İLK ürünü ekle. Kaydırma YAPMA.
-                → Ekledikten sonra "acaba başka ürün mü?" diye arama. Hedefe göre sıradaki
-                  adıma geç (ör. sepet ikonuna tıkla).
+                → Ekranda GÖRÜNEN İLK uygun ürünü kullan
+                → Kaydırma YAPMA (ama yine de detaylı kontrol et)
 
-            Jenerik hedefte kaydırmaya başlamak = HATA. Eklemek = hedefin o kısmı bitti.
+            ADIM 2 - EKRANI DETAYLI İNCELE (HER İKİ DURUMDA DA):
+            - XML'i BAŞTAN SONUNA tara (sadece ilk elemente bakma)
+            - Her elementin text, content-desc, [urun: ...] uzantılarını kontrol et
+            - Popup, banner, onboarding var mı? (varsa önce bunları kapat)
+            - "Acaba başka element var mı?" diye sor
+            - Hızlı karar verme, tam tarama yap
+
+            ADIM 3 - HEDEF EKRANDA VAR MI?
+            - Eğer hedef ekranda VAR → Doğru element seç, işlemi yap
+            - Eğer hedef ekranda YOKSA → KAYDIRMA bölümüne git (sayfa 10)
+              * Spesifik hedef: MUTLAKA kaydırma yap, detaylı arama devam et
+              * Jenerik hedef: 1-2 kaydırma dene, sonra ilk bulunan uygun ürünü kullan
+
+            ADIM 4 - DOĞRU ELEMENTİ SEÇ:
+            - Spesifik hedef: SADECE hedefe tam uyan elementi seç (renk, model, isim eşleşmesi)
+            - Jenerik hedef: İlk uygun elementi seç (ama tıklanabilir mi kontrol et)
+            - clickable=false ise → kapsayıcı clickable element bul
+            - [urun: X] varsa → X ile hedefi karşılaştır
+
+            ÖNEMLİ KURALLAR:
+            1. HER zaman detaylı kontrol yap, XML'i tam tara
+            2. Spesifik hedefte KAYDIRMA ZORUNLUDUR (max 8 kez)
+            3. HER kaydırmadan SONRA XML'i BAŞTAN detaylı tara
+            4. Sadece ilk görünen ürüne güvenme, TÜM listeyi incele
+            5. Jenerik hedefte gereksiz kaydırma yapma, görünen ilk uygun ürünü kullan
 
             ==================================================
             🔴 KURAL 3: ÇOK ADIMLI HEDEF TAKİBİ
@@ -208,18 +260,58 @@ public class LlmAgent {
             - RENK/VARYANT önemli: "yellow" belirtilmişse SADECE o varyantı seç.
 
             ==================================================
-            KAYDIRMA (SWIPE)
+            KAYDIRMA (SWIPE) - ÜRÜN ARAMA İÇİN KRİTİK KURALLAR
+            ============================================================
+            KAYDIRMA (SWIPE) - GENEL KURALLAR
             ==================================================
             direction="down" → EKRANI AŞAĞI kaydır → listede SONRAKİ öğeler görünür.
             direction="up"   → EKRANI YUKARI kaydır → listede ÖNCEKİ öğeler görünür.
 
-            Hedef ekranda yoksa:
-            1. Önce direction="down" dene (çoğu liste en üstten başlar).
-            2. 3 kez aynı yönde kaydır, XML değişmiyorsa → "up" dene.
+            NE ZAMAN KAYDIRMA YAPILIR?
+
+            A) SPESİFİK HEDEFTE (örn: "yellow yazan ürünü seç", "iPhone 15 bul"):
+               1. ÖNCE XML'i DETAYLI Tara:
+                  - Her elementin text/content-desc'ini kontrol et
+                  - [urun: ...] uzantılarını kontrol et
+                  - Renk/varyant isimlerini ara ("yellow", "blue", "red" vb.)
+                  - Eğer hedef BULUNDU → SADECE o elemente tıkla, kaydırma YAPMA
+
+               2. Hedef BULUNAMAZSA kaydırma başlat:
+                  - direction="down" ile başla (liste genelde en üstten başlar)
+                  - HER kaydırmadan SONRA:
+                    a) XML'i BAŞTAN detaylı tara
+                    b) Her görünen elementin ismini/varyantını KONTROL ET
+                    c) Hedef kelimeyi özellikle ara
+                    d) Eğer bulundu → dur, o elemente tıkla
+
+               3. Kaydırma Stratejisi:
+                  - İlk 3 kaydırma: direction="down"
+                  - Hala bulunamadıysa: direction="up" dene
+                  - Max 8 kaydırma yap
+                  - HER kaydırma FARKLI elementler göstermeli
+
+               4. KRİTİK: HER KAYDIRMA SONRASI DETAYLI ARAMA:
+                  - "Acaba hedef element var mı?" diye XML'i baştan sonuna tara
+                  - Sadece ilk elemente bakma, TÜM listeyi kontrol et
+                  - [urun: ...] uzantısı olan her görselin yanındaki text'i oku
+                  - Renk isimlerini (yellow, blue, red, green, black, white) özellikle ara
+
+               5. Hedef bulunduğunda:
+                  - O ELEMENTİN clickable parent'ını bul
+                  - SADECE o elemente tıkla
+                  - Başka elemente dokunma
+
+            B) JENERİK HEDEFTE (örn: "bir ürün ekle", "ürünü sepete ekle"):
+               - KAYDIRMA YAPMA — ekranda görünen İLK uygun elementi kullan
+               - "Acaba başka element var mı?" diye arama
+               - Gereksiz kaydırma yapma, hedefe odaklan
+
+            GENEL KURALLAR (her iki durum için):
+            1. İlk 3 kaydırma: direction="down"
+            2. 3 kez aynı yönde kaydır, XML değişmiyorsa → "up" dene
             3. Max 8 kaydırma. Bunlar LOOP DEĞİL, devam et.
             4. HER kaydırmadan sonra XML'i baştan tara.
-
-            ÖNEMLİ: Jenerik hedefte ("ürünü sepete ekle") kaydırma YAPMA — görünen ürünü ekle.
+            5. Ekran kararsız/animasyonda ise önce wait yap, sonra kaydır.
 
             ==================================================
             POPUP ÖNCELİĞİ
@@ -287,6 +379,7 @@ public class LlmAgent {
             try {
                 AgentAction result = makeLlmRequest(goal, variables, screenshotBase64, pageSource, stepNumber, previousSteps, repeatWarning);
                 if (result != null && result.getAction() != null) {
+                    enforceScenarioAction(result, goal);
                     return result;
                 }
                 System.out.println("Model boş/geçersiz aksiyon döndürdü, tekrar deneniyor (deneme: " + attempt + ")");
@@ -305,6 +398,24 @@ public class LlmAgent {
 
         throw new RuntimeException("Model " + maxRetries + " denemede geçerli JSON döndürmedi: " +
                 (lastException != null ? lastException.getMessage() : "Bilinmeyen hata"), lastException);
+    }
+
+    private void enforceScenarioAction(AgentAction action, String goal) {
+        if (!"type".equalsIgnoreCase(action.getAction()) || allowsExplicitTextInput(goal)) {
+            return;
+        }
+
+        action.setAction("tap");
+        action.setText("");
+        action.setReasoning("Senaryoda metin girme talimatı yok; hedefe dokunuluyor");
+        System.out.println("[AGENT-GUARD] Açık metin girme talimatı olmadığı için type -> tap dönüştürüldü");
+    }
+
+    private boolean allowsExplicitTextInput(String goal) {
+        if (goal == null || goal.isBlank()) {
+            return false;
+        }
+        return EXPLICIT_TEXT_INPUT.matcher(goal.toLowerCase(Locale.ROOT)).find();
     }
 
     private AgentAction makeLlmRequest(String goal, Map<String, String> variables, String screenshotBase64, String pageSource, int stepNumber, List<RunStep> previousSteps, String repeatWarning) throws IOException {
