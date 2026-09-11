@@ -173,6 +173,20 @@ public class AppiumDriverManager {
         return takeScreenshotWithRetry(runId, 2);
     }
 
+    // [DUZELTME 2026-09-11] Canlı simülatör akışı için: retry/backoff YOK, tek deneme.
+    // Amaç, arka plan görüntü döngüsünün bir hata durumunda 1sn+ beklemeden hemen bir
+    // sonraki kareye geçmesi -- video gibi kesintisiz akış için gecikme birikmemeli.
+    // Hata durumunda exception fırlatmak yerine null döner, çağıran taraf sessizce atlar.
+    public String takeScreenshotQuiet(String runId) {
+        try {
+            AppiumDriver driver = driverFor(runId);
+            String screenshot = driver.getScreenshotAs(OutputType.BASE64);
+            return (screenshot != null && !screenshot.isEmpty()) ? screenshot : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private String takeScreenshotWithRetry(String runId, int maxRetries) {
         AppiumDriver driver = driverFor(runId);
         Exception lastException = null;

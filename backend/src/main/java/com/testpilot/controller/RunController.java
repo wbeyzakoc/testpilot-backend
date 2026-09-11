@@ -510,23 +510,40 @@ public class RunController {
             if (captureScreenshot) {
                 screenRefreshRunning.set(true);
                 Thread refreshThread = new Thread(() -> {
+                    // [DUZELTME 2026-09-11] Video-benzeri akıcılık icin iyilestirme:
+                    //   - Sabit "sleep sonra çek" yerine SABİT PERİYOT (fixed-rate) mantığı:
+                    //     her karenin çekim süresi periyottan düşülüyor, böylece çekim
+                    //     yavaşlasa bile bir sonraki kare planlanan zamana yakın gelir ve
+                    //     gecikme zamanla birikmez.
+                    //   - Periyot 250ms'den 120ms'ye indirildi (~8 fps) -- eski değer video
+                    //     hissi vermek için çok yavaştı.
+                    //   - Retry/backoff'lu takeScreenshotBase64 yerine tek denemelik
+                    //     takeScreenshotQuiet kullanılıyor; bir karede hata olursa 1sn+
+                    //     beklemek yerine hemen bir sonraki kare denenir.
+                    final long targetPeriodMs = 120;
                     while (screenRefreshRunning.get() && !run.isStopRequested()) {
-                        try {
-                            // Her 250 ms'de ekran görüntüsünü güncelle (4 fps - video akıcılığı)
-                            Thread.sleep(250);
-                            String freshScreenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
+                        long frameStart = System.currentTimeMillis();
+                        String freshScreenshot = appiumDriverManager.takeScreenshotQuiet(run.getId());
+                        if (freshScreenshot != null) {
                             liveScreenshots.put(run.getId(), freshScreenshot);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            break;
-                        } catch (Exception e) {
-                            System.out.println("[RUN] Arka plan ekran güncelleme hatası: " + e.getMessage());
                         }
+                        long elapsed = System.currentTimeMillis() - frameStart;
+                        long remaining = targetPeriodMs - elapsed;
+                        if (remaining > 0) {
+                            try {
+                                Thread.sleep(remaining);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
+                        }
+                        // remaining <= 0 ise (çekim periyottan uzun sürdüyse) hiç
+                        // beklemeden hemen bir sonraki kareye geçilir -- gecikme birikmez.
                     }
                 });
                 refreshThread.setDaemon(true);
                 refreshThread.start();
-                System.out.println("[RUN] Arka plan ekran güncelleme döngüsü başlatıldı (250ms)");
+                System.out.println("[RUN] Arka plan ekran güncelleme döngüsü başlatıldı (~120ms / 8fps hedef)");
             }
 
             String lastActionSignature = null;
