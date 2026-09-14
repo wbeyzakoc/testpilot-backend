@@ -207,6 +207,35 @@ public class LlmAgent {
         - WRONG: Tapping the same product again on the new screen → this is a loop!
 
         ==================================================
+        MULTI-STEP SCENARIOS (CRITICAL - READ CAREFULLY)
+        ==================================================
+        If goal contains "sonra" or "ve sonra" or "ardından" → this is a MULTI-STEP scenario!
+        Example: "uygulamayı aç. Sauce Labs Backpack (yellow) ürünü bul ve tıkla. sonra products ekranına geri dön. Sauce Labs Backpack (orange) ürününü bul ve tıkla. sonra testi bitir."
+        
+        MULTI-STEP EXECUTION RULES:
+        1. ✅ Find and tap FIRST product (yellow) → screen changes → this is NOT the end!
+        2. ✅ After first product tapped, look for "geri dön" or "back" button → tap it
+        3. ✅ Return to products screen → find SECOND product (orange) → tap it
+        4. ✅ ONLY after LAST product is tapped → action="done"
+        
+        ⚠️ CRITICAL: After tapping a product in multi-step scenario:
+        - If XML changed (new screen) → DO NOT tap the same product again!
+        - Check if there are more products to find (look for "sonra" in goal)
+        - If more steps exist → find "back" button or "products" navigation
+        - If this was the LAST product → action="done"
+        
+        EXAMPLE MULTI-STEP FLOW:
+        Goal: "yellow ürünü tıkla. sonra geri dön. orange ürünü bul ve tıkla. sonra testi bitir."
+        - Step 1: swipe → find yellow → action="tap"
+        - Step 2: XML changed (product detail) → look for "Back" or "←" or "Products" → action="tap"
+        - Step 3: XML changed (products list) → swipe → find orange → action="tap"
+        - Step 4: XML changed (product detail) → action="done" (LAST product clicked!)
+        
+        ⚠️ WRONG: After tapping yellow, tapping yellow again → this is a loop!
+        ⚠️ WRONG: After tapping yellow, immediately action="done" → incomplete!
+        ✓ CORRECT: After tapping yellow, find back button → navigate back → find orange
+
+        ==================================================
         FAIL (takıldığında)
         ==================================================
         Before giving up, make sure you actually: read the full XML at least once, tried
@@ -310,6 +339,135 @@ public class LlmAgent {
         return EXPLICIT_TEXT_INPUT.matcher(goal.toLowerCase(Locale.ROOT)).find();
     }
 
+    // [YENİ 2026-09-14] MULTI-STEP SENARYO DURUM ANALİZİ
+    // Modelin hangi adımda olduğunu anlaması için otomatik analiz yapar
+    private String analyzeMultiStepProgress(String goal, List<RunStep> previousSteps) {
+        if (goal == null || goal.isBlank()) return null;
+        
+        String lowerGoal = goal.toLowerCase();
+        boolean isMultiStep = lowerGoal.contains("sonra") || lowerGoal.contains("ve sonra") || lowerGoal.contains("ardından");
+        
+        if (!isMultiStep) return null; // Multi-step değil
+        
+        // Goal'daki adımları ayır
+        String[] steps = splitMultiStepGoal(goal);
+        
+        // Her adımın tamamlanıp tamamlanmadığını kontrol et
+        StringBuilder analysis = new StringBuilder();
+        int completedCount = 0;
+        
+        for (int i = 0; i < steps.length; i++) {
+            String step = steps[i].trim();
+            boolean isCompleted = isStepCompleted(step, previousSteps);
+            
+            if (isCompleted) {
+                analysis.append("✅ ").append(i + 1).append(". adım TAMAMLANDI: ").append(step).append("\n");
+                completedCount++;
+            } else {
+                analysis.append("⏳ ").append(i + 1).append(". adım BEKLİYOR: ").append(step).append("\n");
+            }
+        }
+        
+        analysis.append("\n📊 İLERLEME: ").append(completedCount).append("/").append(steps.length).append(" adım tamamlandı\n");
+        
+        if (completedCount < steps.length) {
+            analysis.append("🎯 ŞU AN YAPILMASI GEREKEN: ").append(steps[completedCount].trim()).append("\n");
+            
+            // Sonraki adım için özel talimatlar
+            String nextStep = steps[completedCount].toLowerCase();
+            if (nextStep.contains("geri dön") || nextStep.contains("back") || nextStep.contains("menü")) {
+                analysis.append("💡 İPUCU: 'Geri' veya 'Back' veya '←' butonunu ara. Aynı ürüne tekrar tıklama!\n");
+            } else if (nextStep.contains("bul") || nextStep.contains("seç") || nextStep.contains("tap")) {
+                // Sonraki ürünü bul
+                String nextProduct = extractProductName(nextStep);
+                if (nextProduct != null) {
+                    analysis.append("💡 İPUCU: '").append(nextProduct).append("' ürününü XML'de ara. [product: ").append(nextProduct).append("] etiketini ara!\n");
+                }
+            }
+        }
+        
+        return analysis.toString();
+    }
+    
+    // Multi-step goal'ı adımlara ayırır
+    private String[] splitMultiStepGoal(String goal) {
+        // "sonra", "ve sonra", "ardından" kelimelerine göre ayır
+        return goal.toLowerCase()
+            .replaceAll("sonra\\s+", "")
+            .replaceAll("ve sonra\\s+", "")
+            .replaceAll("ardından\\s+", "")
+            .split("\\.\\s*(?=uygulamayı|bul|tıkla|tap|seç|geri dön|bitir|tamamla)");
+    }
+    
+    // Bir adımın tamamlanıp tamamlanmadığını kontrol eder
+    private boolean isStepCompleted(String step, List<RunStep> previousSteps) {
+        if (previousSteps == null || previousSteps.isEmpty()) return false;
+        
+        String lowerStep = step.toLowerCase();
+        
+        // Her başarılı adım için kontrol et (failed adimlari atla)
+        for (RunStep runStep : previousSteps) {
+            // Not: RunStep'te status field'i yok, bu yüzden sadece action/target'a bak
+            String target = runStep.getTarget() != null ? runStep.getTarget().toLowerCase() : "";
+            String action = runStep.getAction() != null ? runStep.getAction().toLowerCase() : "";
+            
+            // "tıkla" adımı için
+            if (lowerStep.contains("tıkla") || lowerStep.contains("tap")) {
+                // Goal'daki ürün adını çıkar
+                String productName = extractProductName(lowerStep);
+                if (productName != null && target.contains(productName)) {
+                    return true;
+                }
+            }
+            
+            // "geri dön" adımı için
+            if (lowerStep.contains("geri dön") || lowerStep.contains("back")) {
+                if (target.contains("geri") || target.contains("back") || target.contains("menu")) {
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+    
+    // Goal'dan ürün adını çıkarır (örn: "Sauce Labs Backpack (yellow)")
+    private String extractProductName(String text) {
+        if (text == null) return null;
+        
+        // [product: X] pattern'i ara
+        int productStart = text.indexOf("[product:");
+        if (productStart >= 0) {
+            int start = productStart + 9;
+            int end = text.indexOf("]", start);
+            if (end > start) {
+                return text.substring(start, end);
+            }
+        }
+        
+        // Parantezli renk bilgisi varsa (örn: "(yellow)")
+        // Onun ÖNCEKİ kelimeleri ürün adı olarak al
+        int lastParen = text.lastIndexOf("(");
+        if (lastParen > 0) {
+            String beforeParen = text.substring(0, lastParen);
+            String[] words = beforeParen.trim().split("\\s+");
+            if (words.length > 0) {
+                // Son 2-3 kelimeyi ürün adı olarak al
+                int startIdx = Math.max(0, words.length - 3);
+                StringBuilder productName = new StringBuilder();
+                for (int i = startIdx; i < words.length; i++) {
+                    if (productName.length() > 0) productName.append(" ");
+                    productName.append(words[i]);
+                }
+                if (productName.length() > 0) {
+                    return productName.toString();
+                }
+            }
+        }
+        
+        return null;
+    }
+
     private AgentAction makeLlmRequest(String goal, Map<String, String> variables, String screenshotBase64, String pageSource, int stepNumber, List<RunStep> previousSteps, String repeatWarning) throws IOException {
         try {
             var userContent = mapper.createArrayNode();
@@ -319,18 +477,24 @@ public class LlmAgent {
             StringBuilder historyText = new StringBuilder();
             if (previousSteps != null && !previousSteps.isEmpty()) {
                 historyText.append("Önceki adımlarda yaptıkların (en yenisi en altta):\n");
-                // Daha once son 3 adimla siniirliydi -- ayni elemente aradaki baska bir
-                // tiklamadan (orn. bir popup/Devam et) sonra tekrar donuldugunde model bu
-                // eski denemeyi artik goremiyor, "ilk kez goruyormus" gibi tekrar deniyordu.
-                // 6'ya cikarilarak bu pencere genisletildi.
-                int start = Math.max(0, previousSteps.size() - 6);
+                // [DUZELTME 2026-09-14] MULTI-STEP TAKİBİ İÇİN SON 10 ADIM
+                // Modelin multi-step senaryolarda hangi adımda olduğunu hatırlaması için
+                int start = Math.max(0, previousSteps.size() - 10);
                 for (int i = start; i < previousSteps.size(); i++) {
                     RunStep s = previousSteps.get(i);
-                    historyText.append("- ").append(s.getStep()).append(". adım: ")
+                    // RunStep'te status field'i yok, sadece ✅ göster
+                    historyText.append("- ✅ ").append(s.getStep()).append(". adım: ")
                             .append(s.getAction()).append(" -> ").append(s.getTarget())
                             .append(" (").append(s.getReasoning()).append(")\n");
                 }
                 historyText.append("\n");
+                
+                // [YENİ 2026-09-14] MULTI-STEP DURUM ANALİZİ
+                // Modelin hangi adımda olduğunu anlaması için otomatik analiz
+                String multiStepAnalysis = analyzeMultiStepProgress(goal, previousSteps);
+                if (multiStepAnalysis != null && !multiStepAnalysis.isBlank()) {
+                    historyText.append("🔍 MULTI-STEP DURUM ANALİZİ:\n").append(multiStepAnalysis).append("\n\n");
+                }
             }
 
             // RunController'daki tekrar-tespiti (repeatCount==1, henuz FAIL esigi olan 2'ye

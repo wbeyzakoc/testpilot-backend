@@ -84,6 +84,32 @@ public class RunController {
             return false;
         }
         
+        // [DUZELTME 2026-09-14] MULTI-STEP SENARYO KONTROLÜ
+        // Goal'da "sonra" veya "ve sonra" varsa -> bu multi-step senaryo!
+        // Bu durumda SADECE SON ÜRÜN tıklandıktan sonra tamamlanma yapılır.
+        boolean isMultiStep = goal != null && (goal.toLowerCase().contains("sonra") || 
+                                               goal.toLowerCase().contains("ve sonra"));
+        
+        if (isMultiStep) {
+            System.out.println("[GOAL-COMPLETE] 🔄 MULTI-STEP SENARYO TESPİT EDİLDİ");
+            
+            // Goal'daki SON ürünü bul (en son gelen renk/variyant)
+            String lastProductInGoal = findLastProductInGoal(goal);
+            System.out.println("[GOAL-COMPLETE] Son hedef ürün: '" + lastProductInGoal + "'");
+            
+            if (lastProductInGoal != null) {
+                // Şu an tıklanan ürün, goal'daki SON ürün mü?
+                if (!target.contains(lastProductInGoal)) {
+                    System.out.println("[GOAL-COMPLETE] ✗ HENÜZ SON ÜRÜN TIKLANMADI!");
+                    System.out.println("[GOAL-COMPLETE] Tıklanan: '" + target + "'");
+                    System.out.println("[GOAL-COMPLETE] Beklenen son ürün: '" + lastProductInGoal + "'");
+                    return false; // Henüz son ürüne tıklanmadı! Tamamlanma YOK!
+                } else {
+                    System.out.println("[GOAL-COMPLETE] ✓ SON ÜRÜN TIKLANDI: '" + lastProductInGoal + "'");
+                }
+            }
+        }
+        
         // Goal "tıkla ve testi bitir" pattern'i içeriyor mu?
         boolean goalRequiresCompletion = goal != null && goal.toLowerCase().contains("tıkla") && 
                                          (goal.toLowerCase().contains("bitir") || 
@@ -91,9 +117,12 @@ public class RunController {
                                           goal.toLowerCase().contains("tamamla"));
         
         // Goal "bul ve tıkla" pattern'i içeriyor mu? (ürün seçimi senaryosu)
-        boolean goalIsProductSelection = goal != null && (goal.toLowerCase().contains("bul") || 
-                                                           goal.toLowerCase().contains("seç") ||
-                                                           goal.toLowerCase().contains("tap")) &&
+        // [DUZELTME] Multi-step ise BU KONTROLÜ YAPMA!
+        boolean goalIsProductSelection = !isMultiStep && 
+                                         goal != null && 
+                                         (goal.toLowerCase().contains("bul") || 
+                                          goal.toLowerCase().contains("seç") ||
+                                          goal.toLowerCase().contains("tap")) &&
                                          !goal.toLowerCase().contains("sonra") &&
                                          !goal.toLowerCase().contains("ve sonra");
         
@@ -129,6 +158,42 @@ public class RunController {
         }
         
         return canComplete;
+    }
+
+    // Goal'daki SON ürün adını bulur (en son gelen [product: X] veya parantezli renk bilgisi)
+    private String findLastProductInGoal(String goal) {
+        if (goal == null) return null;
+        
+        // "[product: X]" pattern'ini ara (en sonuncusunu bul)
+        int lastProductIndex = goal.lastIndexOf("[product:");
+        if (lastProductIndex >= 0) {
+            int start = lastProductIndex + 9; // "[product: ".length()
+            int end = goal.indexOf("]", start);
+            if (end > start) {
+                return goal.substring(start, end);
+            }
+        }
+        
+        // "[product: X]" yoksa, goal'daki SON parantezli bilgiyi bul (örn: "(orange)")
+        // ve ondan ÖNCE gelen ürün ismini al
+        int lastParenStart = goal.lastIndexOf("(");
+        int lastParenEnd = goal.lastIndexOf(")");
+        
+        if (lastParenStart >= 0 && lastParenEnd > lastParenStart) {
+            String parenContent = goal.substring(lastParenStart, lastParenEnd + 1); // "(orange)"
+            
+            // Parantezden ÖNCEki metni al
+            String beforeParen = goal.substring(0, lastParenStart);
+            
+            // Son kelimeyi bul (ürün adı)
+            String[] words = beforeParen.trim().split("\\s+");
+            if (words.length > 0) {
+                String productName = words[words.length - 1];
+                return productName + parenContent;
+            }
+        }
+        
+        return null;
     }
 
     // [DUZELTME 2026-09-10] Modelin dondurdugu elementId'yi int'e cevirir. Sadece saf rakam
@@ -209,29 +274,69 @@ public class RunController {
     // Goal ile ekranda bulunan elementin TAM olarak eşleşip eşleşmediğini kontrol eder.
     // Parantez içindeki renk/variyant bilgisi de dahil HER ŞEY eşleşmelidir.
     // Örn: Goal "Sauce Labs Backpack (violet)" vs Target "Sauce Labs Backpack (green)" -> false
+    // Bir metindeki TÜM parantezli varyant token'larını (renk/isim) döndürür.
+    // Örn: "... (yellow) ... (orange) ..." -> ["yellow", "orange"].
+    // Sadece indeks olan sayısal token'lar ("(4)") ELENIR; bunlar varyant değildir.
+    private java.util.List<String> extractVariantTokens(String s) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (s == null) return out;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\(([^)]+)\\)").matcher(s);
+        while (m.find()) {
+            String token = m.group(1).trim();
+            if (!token.isEmpty() && !token.matches("\\d+")) {
+                out.add(token);
+            }
+        }
+        return out;
+    }
+
+    // ============================================================================================
+    // [DUZELTME 2026-09-14] ÇOK ADIMLI / ÇOK VARYANTLI HEDEF DESTEĞI
+    //
+    // ONCEKI SORUN: Sadece goal'daki İLK parantezi (goal.indexOf("(")) baz alıyordu.
+    // "... (yellow) ... sonra ... (orange) ..." gibi ÇOK ADIMLI bir senaryoda bu, HER tap'ın
+    // "(yellow)" içermesini zorluyordu; bu yüzden (a) geri dönmek için basılan navigasyon
+    // butonu ("View menu") ve (b) 3. adımdaki DOĞRU "(orange)" ürünü HARD-BLOCK ile
+    // engelleniyor, test 15 adımı boşa harcayıp başarısız oluyordu.
+    //
+    // YENİ DAVRANIŞ:
+    //   1) Goal'daki TÜM varyant token'ları toplanır (yellow, orange, ...).
+    //   2) Goal hiç varyant belirtmiyorsa kısıtlama yok -> geçerli.
+    //   3) Hedefin kendi varyant token'ı yoksa (geri butonu, "Finish", menü gibi navigasyon/
+    //      genel elementler) YANLIŞ-RENK ürünü DEĞİLDİR -> engelleme.
+    //   4) Hedefin varyantı goal varyantlarından HERHANGİ biriyle eşleşiyorsa -> geçerli.
+    //   5) Aksi halde (ör. goal {violet} ama target {green}) -> yanlış varyant, engelle.
+    // Böylece tek-hedefli goal'lardaki yanlış-renk koruması KORUNUR, çok-adımlı goal'lar ÇALIŞIR.
+    // ============================================================================================
     private boolean targetsExactMatch(String goal, String target) {
         if (goal == null || target == null) {
             return false;
         }
-        
-        // Goal'da parantez içinde bilgi varsa (örn: "(violet)"), target da aynı bilgiyi içermeli
-        int goalParenStart = goal.indexOf("(");
-        int goalParenEnd = goal.indexOf(")");
-        
-        if (goalParenStart >= 0 && goalParenEnd > goalParenStart) {
-            String goalParenContent = goal.substring(goalParenStart, goalParenEnd + 1);
-            boolean targetHasParenInfo = target.contains(goalParenContent);
-            
-            if (!targetHasParenInfo) {
-                System.out.println("[EXACT-MATCH] ⚠ Parantezli bilgi eşleşmiyor: goal='" + goalParenContent + 
-                                 "', target='" + target + "'");
-                return false;
+
+        java.util.List<String> goalVariants = extractVariantTokens(goal);
+        if (goalVariants.isEmpty()) {
+            return true;
+        }
+
+        java.util.List<String> targetVariants = extractVariantTokens(target);
+        if (targetVariants.isEmpty()) {
+            // Varyant taşımayan hedef = navigasyon/genel element -> yanlış ürün değil.
+            return true;
+        }
+
+        for (String tv : targetVariants) {
+            for (String gv : goalVariants) {
+                if (tv.equalsIgnoreCase(gv)) {
+                    System.out.println("[EXACT-MATCH] ✓ Varyant eşleşti: '" + tv +
+                                     "' goal varyantlarında mevcut " + goalVariants);
+                    return true;
+                }
             }
         }
-        
-        // Parantezli bilgi yoksa veya eşleşiyorsa -> tam eşleşme
-        System.out.println("[EXACT-MATCH] ✓ Tam eşleşme: goal='" + goal + "', target='" + target + "'");
-        return true;
+
+        System.out.println("[EXACT-MATCH] ⚠ Varyant eşleşmiyor: target=" + targetVariants +
+                         ", goal=" + goalVariants);
+        return false;
     }
 
     private final AppiumDriverManager appiumDriverManager;
@@ -854,9 +959,18 @@ public class RunController {
                 // eleman FARKLI oldugu her durumda calisir -- [product: ...] etiketine bagli degildir,
                 // herhangi bir uygulamada (SauceLabs'e ozel degil) genel olarak calisir.
                 // ============================================================================================
+                // [DUZELTME 2026-09-14] ÇOK ADIMLI GOAL: targetOnScreen goal-genelidir
+                // (ör. çok adımlı senaryoda hep ilk varyant "yellow" döner). Model, ürün
+                // detayından geri dönmek için navigasyon butonuna ("View menu", geri) ya da
+                // sonraki adımın DOĞRU ürününe (ör. "orange") bastığında chosenLabel,
+                // targetOnScreen'den FARKLIDIR ama YANLIŞ ürün DEĞİLDİR. Bu yüzden guard'ı
+                // yalnızca chosenLabel GERÇEKTEN yanlış bir varyant taşıyorsa (targetsExactMatch
+                // false) tetikliyoruz -- aksi halde geri navigasyonu ve sonraki adımları
+                // engelleyip test'i yellow detayında kilitliyordu.
                 if ("tap".equals(action.getAction()) && targetOnScreen != null) {
                     String chosenLabel = appiumDriverManager.labelForElementId(rawPageSource, action.getElementId(), run.getGoal());
-                    if (chosenLabel != null && !chosenLabel.equals(targetOnScreen)) {
+                    if (chosenLabel != null && !chosenLabel.equals(targetOnScreen)
+                            && !targetsExactMatch(run.getGoal(), chosenLabel)) {
                         wrongTapRefusedCount[0]++;
                         System.out.println("[RUN] YANLIS URUN SECIMI ENGELLENDI (" + wrongTapRefusedCount[0] + ". kez): model \""
                                 + chosenLabel + "\" secti ama hedefe uyan \"" + targetOnScreen + "\" ekranda mevcut");
@@ -926,11 +1040,19 @@ public class RunController {
                     notFoundStreak[0] = 0;
                 } else {
                     String currentSignature = action.getAction() + "|" + action.getTarget();
+                    
+                    // [DUZELTME 2026-09-14] MULTI-STEP SENARYOLARDA AKILLI DÖNGÜ TESPİTİ
+                    // Eğer XML değiştiyse -> bu bir döngü DEĞİLDİR, ilerleme var!
+                    // Sadece XML değişmediyse ve aynı elemente tekrar tıklanıyorsa -> döngü
                     if (currentSignature.equals(lastActionSignature) && !xmlChanged) {
                         repeatCount++;
+                        System.out.println("[RUN] ⚠️ AYNI AKSİYON TEKRARI: repeatCount=" + repeatCount + 
+                                         ", target=" + action.getTarget() + ", xmlChanged=false");
                     } else {
                         if (xmlChanged && currentSignature.equals(lastActionSignature)) {
-                            System.out.println("[RUN] XML degisti, repeatCount sifirlaniyor (ilerleme var)");
+                            System.out.println("[RUN] ✓ XML değişti, repeatCount sifirlaniyor (ilerleme var) - target: " + action.getTarget());
+                        } else if (!currentSignature.equals(lastActionSignature)) {
+                            System.out.println("[RUN] ✓ Farklı aksiyon, repeatCount sifirlaniyor - new target: " + action.getTarget());
                         }
                         repeatCount = 0;
                         lastActionSignature = currentSignature;
