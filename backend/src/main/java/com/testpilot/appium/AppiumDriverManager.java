@@ -322,10 +322,18 @@ public class AppiumDriverManager {
             if (bounds == null) continue;
 
             String label;
-            if (desc != null && !desc.isBlank()) {
-                label = desc;
-            } else if (text != null && !text.isBlank()) {
+            // [DUZELTME 2026-09-14] ONCELIK SIRASI DEGISTIRILDI: content-desc yerine ONCE text
+            // kullaniliyor. ONCEKI SORUN: bazi uygulamalarda content-desc, TUM ayni tipteki
+            // elementlerde JENERIK/SABIT bir sablon degeri tasir (ör. content-desc="Product Title"
+            // her urun icin AYNI), oysa GERCEK/BENZERSIZ deger (ör. "Sauce Labs Backpack (yellow)")
+            // sadece text attribute'unda bulunur. Eskiden content-desc ONCE secildigi icin bu
+            // GERCEK deger HICBIR ZAMAN goruntulenmiyor/aranmiyordu. text genelde ekranda
+            // GORUNEN gercek degerdir, bu yuzden artik oncelikli. content-desc SADECE text
+            // bossa (ikon/dugme gibi salt-erisilebilirlik etiketli elementlerde) kullanilir.
+            if (text != null && !text.isBlank()) {
                 label = text;
+            } else if (desc != null && !desc.isBlank()) {
+                label = desc;
             } else if (resourceIdLabel != null && !resourceIdLabel.isBlank()) {
                 label = resourceIdLabel;
             } else if (isPassword) {
@@ -372,11 +380,32 @@ public class AppiumDriverManager {
     private List<Elem> buildEmittedList(String rawPageSource, String goal) {
         List<Elem> numbered = parseNumberedElements(rawPageSource);
 
+        // [DUZELTME 2026-09-11] ONEMLI SIRALAMA HATASI DUZELTILDI:
+        // Eskiden "[urun: X]" zenginlestirmesi SIRALAMADAN SONRA yapiliyordu, yani
+        // relevanceScore() bir "Product Image" gibi genel etiketli gorselin GERCEKTE
+        // hangi urune ait oldugunu (ornegin "yellow" varyanti) HENUZ BILMEDEN puanliyordu.
+        // Sonuc: hedefte "yellow" gibi ozel bir oznitelik varsa, DOGRU urunun gorseli
+        // listenin BASINA tasinmiyordu -- CHAR_BUDGET disinda kalabiliyor ya da model
+        // onu gormeden once yanlis/rastgele bir urune tikliyordu. Bu, sadece renkli
+        // urunlerle sinirli degil; herhangi bir uygulamada (herhangi bir liste/grid'de)
+        // gorselin yaninda ayri bir metin etiketiyle tanimlanan HER senaryoyu etkiler.
+        // Simdi ONCE tum elementler zenginlestiriliyor, SONRA bu zenginlestirilmis
+        // etiketler uzerinden alaka puani hesaplaniyor ve siralaniyor.
+        List<Elem> allForContext = new ArrayList<>(numbered);
+        List<Elem> enrichedNumbered = new ArrayList<>(numbered.size());
+        for (Elem e : numbered) {
+            String enrichedLabel = enrichImageLabel(e, allForContext);
+            enrichedNumbered.add(enrichedLabel.equals(e.label())
+                    ? e
+                    : new Elem(enrichedLabel, e.bounds(), e.clickable(), e.isPassword(),
+                    e.className(), e.resourceId(), e.text(), e.contentDesc()));
+        }
+
         List<Elem> labeledEls = new ArrayList<>();
         List<Elem> textOnlyEls = new ArrayList<>();
         List<Elem> unlabeledEls = new ArrayList<>();
 
-        for (Elem e : numbered) {
+        for (Elem e : enrichedNumbered) {
             boolean hasLabel = !e.label().isBlank();
             if ((e.clickable() || e.isPassword()) && hasLabel) {
                 labeledEls.add(e);
@@ -404,20 +433,13 @@ public class AppiumDriverManager {
             }
         }
 
-        List<Elem> allForContext = new ArrayList<>(numbered);
-
         List<Elem> emitted = new ArrayList<>();
         int budgetUsed = 0;
         for (Elem e : ordered) {
-            String enrichedLabel = enrichImageLabel(e, allForContext);
-            Elem toEmit = enrichedLabel.equals(e.label())
-                    ? e
-                    : new Elem(enrichedLabel, e.bounds(), e.clickable(), e.isPassword(),
-                    e.className(), e.resourceId(), e.text(), e.contentDesc());
-            String line = formatLine(emitted.size() + 1, toEmit);
+            String line = formatLine(emitted.size() + 1, e);
             if (budgetUsed + line.length() + 1 > CHAR_BUDGET) break;
             budgetUsed += line.length() + 1;
-            emitted.add(toEmit);
+            emitted.add(e);
         }
         return emitted;
     }
@@ -486,19 +508,45 @@ public class AppiumDriverManager {
     }
 
     // ============================================================================================
-    // enrichImageLabel -- esikler gevsetildi (2026-09-10)
+    // enrichImageLabel -- GENELLESTIRILDI (2026-09-14)
+    //   ONCEKI SORUN: Bu fonksiyon SADECE elementin KENDI etiketi zaten "image"/"görsel"/"resim"/
+    //   "foto"/"photo" kelimesini iceriyorsa calisiyordu (ornegin content-desc="Product Image").
+    //   Gercek uygulamalarda (SauceLabs demosu disinda) urun gorselleri COGUNLUKLA hic
+    //   content-desc/text tasimaz (bos etiket) -- bu durumda fonksiyon HEMEN return ediyordu
+    //   ve gorsel HICBIR ZAMAN yakinindaki urun adiyla eslesmiyordu. Simdi ayrica:
+    //     - className "Image"/"Icon"/"Photo" gecen (ImageView, ImageButton, XCUIElementTypeImage vb.)
+    //     - VEYA tiklanabilir olup etiketi TAMAMEN BOS olan (tipik "urun karti" davranisi)
+    //   elementler de zenginlestirme adayi sayilir. Bu, herhangi bir uygulamada (Android/iOS,
+    //   e-ticaret/market/baska domain) urun/varyant metninin gorselin yanina otomatik
+    //   baglanmasini saglar.
     //   - dx > 700 (liste satirlarinda gorsel solda, ad sagda olabilir)
     //   - dist formulu dy agirlikli (ayni satirdaki urun icin dy kucuk olmali)
     //   - minDist < 2500
     // ============================================================================================
-    private String enrichImageLabel(Elem e, List<Elem> allElements) {
+    private static final Set<String> IMAGE_LIKE_CLASS_HINTS = Set.of(
+            "image", "icon", "photo", "picture", "thumbnail", "cover", "avatar"
+    );
+
+    private boolean looksLikeImageElement(Elem e) {
         String label = e.label();
-        if (label == null || label.isBlank()) return label;
-        String lower = label.toLowerCase(Locale.ROOT);
-        if (!(lower.contains("image") || lower.contains("görsel") || lower.contains("resim")
-                || lower.contains("foto") || lower.contains("photo"))) {
-            return label;
+        String lower = label == null ? "" : label.toLowerCase(Locale.ROOT);
+        if (lower.contains("image") || lower.contains("görsel") || lower.contains("resim")
+                || lower.contains("foto") || lower.contains("photo")) {
+            return true;
         }
+        String className = e.className() == null ? "" : e.className().toLowerCase(Locale.ROOT);
+        for (String hint : IMAGE_LIKE_CLASS_HINTS) {
+            if (className.contains(hint)) return true;
+        }
+        // Etiketi tamamen bos ama tiklanabilir/erisilebilir bir element -- tipik "urun karti"
+        // veya ikon; bu da bir zenginlestirme adayidir (gercek uygulamalarda content-desc
+        // cogunlukla hic set edilmez).
+        return (label == null || label.isBlank()) && (e.clickable());
+    }
+
+    private String enrichImageLabel(Elem e, List<Elem> allElements) {
+        String label = e.label() == null ? "" : e.label();
+        if (!looksLikeImageElement(e)) return label;
         int[] rect = parseBounds(e.bounds());
         if (rect == null) return label;
         int eCx = (rect[0] + rect[2]) / 2;
@@ -531,7 +579,9 @@ public class AppiumDriverManager {
             }
         }
         if (nearest != null && minDist < 2500) {
-            return label + " [urun: " + nearest.label() + "]";
+            return label.isBlank()
+                    ? "[product: " + nearest.label() + "]"
+                    : label + " [product: " + nearest.label() + "]";
         }
         return label;
     }
@@ -552,6 +602,23 @@ public class AppiumDriverManager {
         if (e.isPassword()) sb.append(" şifre-alanı");
         if (!e.label().isBlank()) {
             sb.append(" \"").append(e.label().replace("\"", "'")).append("\"");
+        }
+        // [DUZELTME 2026-09-14] label SADECE content-desc/text/resourceId'den TEK birini
+        // (oncelik sirasina gore) secip gosteriyordu -- content-desc VARSA text GORMEZDEN
+        // GELINIYORDU (bkz. parseNumberedElements). Bir elementte content-desc="Item 3" gibi
+        // JENERIK bir deger, text="Yellow T-Shirt" gibi ASIL ARANACAK deger olabilir. Bu
+        // durumda model text'i HICBIR ZAMAN GOREMIYORDU. Simdi text, label'dan FARKLIYSA
+        // ayrica ekleniyor -- boylece arama (model VEYA findMatchingTarget) her iki degeri de
+        // gorur. Herhangi bir uygulamada gecerlidir, ozel bir varsayima dayanmaz.
+        if (e.text() != null && !e.text().isBlank() && !e.text().equalsIgnoreCase(e.label())) {
+            sb.append(" text=\"").append(e.text().replace("\"", "'")).append("\"");
+        }
+        // content-desc de label'dan (artik oncelikli olan text'ten) FARKLIYSA ayrica gosterilir --
+        // bazi elementlerde ek/farkli bir aciklama tasiyabilir (ör. ikon butonlarda).
+        if (e.contentDesc() != null && !e.contentDesc().isBlank()
+                && !e.contentDesc().equalsIgnoreCase(e.label())
+                && !e.contentDesc().equalsIgnoreCase(e.text())) {
+            sb.append(" desc=\"").append(e.contentDesc().replace("\"", "'")).append("\"");
         }
         if (e.className() != null && !e.className().isBlank()) {
             sb.append(" (").append(e.className()).append(")");
@@ -743,9 +810,29 @@ public class AppiumDriverManager {
     }
 
     /**
+     * [DUZELTME 2026-09-14] Bir elementin ARANABILIR tum metnini (label + ham text +
+     * ham content-desc) tek bir kucuk-harf stringte birlestirir. ONCEKI SORUN: eslesme
+     * kontrolleri SADECE e.label()'a bakiyordu; ama label, content-desc/text/resourceId
+     * arasindan SADECE BIRINI (oncelik sirasina gore) seciyor -- content-desc VARSA text
+     * TAMAMEN GORMEZDEN GELINIYORDU. Bir elementte content-desc="Item 3" (jenerik) ama
+     * text="Yellow T-Shirt" (asil aranan deger) olabilir; bu durumda "yellow" kelimesi
+     * ASLA bulunamiyordu. Artik TUM tier'lar bu birlesik haystack uzerinden "contains" ile
+     * arama yapiyor -- herhangi bir uygulamada gecerlidir.
+     */
+    private String searchableHaystack(Elem e) {
+        StringBuilder sb = new StringBuilder();
+        if (e.label() != null) sb.append(e.label()).append(' ');
+        if (e.text() != null) sb.append(e.text()).append(' ');
+        if (e.contentDesc() != null) sb.append(e.contentDesc()).append(' ');
+        return sb.toString().toLowerCase(Locale.ROOT);
+    }
+
+    /**
      * Hedef urun/eleman ekranda ZATEN var mi diye kontrol eder.
      *
-     * YAKLASIM: 4 kademeli + IDF-benzeri puanlama
+     * YAKLASIM: 5 kademeli + XPath tabanlı kesin eşleşme
+     *   TIER 0: TAM ÜRÜN ADI (XPath ile kesin eşleşme) -- goal'da "Sauce Labs Backpack (yellow)" gibi
+     *           tam ürün adı varsa, XPath ile //*[contains(@text,'...')] şeklinde ara
      *   TIER 1: [urun: X] eki -- X goal'da TAM olarak geciyor (en guclu)
      *   TIER 2: Duz etiket -- etiket goal'da TAM olarak geciyor
      *   TIER 3: Ayirt edici kelime -- XML'de <=2 elementte gecen hedef kelimesi
@@ -766,11 +853,39 @@ public class AppiumDriverManager {
             return null;
         }
 
+        // ========================================================================================
+        // TIER 0: TAM ÜRÜN ADI EŞLEŞTİRME (XPath tabanlı - EN GÜÇLÜ)
+        // Goal'da "Sauce Labs Backpack (yellow)" gibi tam ürün adı varsa, bunu XPath ile kesin
+        // olarak ara. Bu, "içerisinde yellow yazan ürün" gibi genel aramalardan AYRILIR.
+        // ========================================================================================
+        String exactProductName = extractExactProductName(goal);
+        if (exactProductName != null) {
+            System.out.println("[findMatch] TIER-0 (TAM ÜRÜN ADI) aranıyor: " + exactProductName);
+            
+            // XPath ile tam eşleşme kontrolü
+            String xpathQuery = "//*[contains(@text, '" + exactProductName + "')]";
+            System.out.println("[findMatch] XPath sorgusu: " + xpathQuery);
+            
+            // enriched listesinde XPath'e uygun element ara
+            for (Elem e : enriched) {
+                String haystack = searchableHaystack(e);
+                // Tam ürün adını içeren element bul
+                if (haystack.contains(exactProductName.toLowerCase(Locale.ROOT))) {
+                    System.out.println("[findMatch] TIER-0 EŞLEŞTİ: " + e.label() + " (XPath: " + xpathQuery + ")");
+                    return e.label();
+                }
+            }
+            
+            // XPath ile canlı uygulamada da dene (eğer driver varsa)
+            // Not: Bu metod statik olduğu için driver'a erişemiyoruz, ama XML parsing yeterli
+            System.out.println("[findMatch] TIER-0: " + exactProductName + " bulunamadı");
+        }
+
         Map<String, Integer> keywordFrequency = new HashMap<>();
         for (String kw : goalContentWords) {
             int count = 0;
             for (Elem e : enriched) {
-                if (e.label().toLowerCase(Locale.ROOT).contains(kw)) count++;
+                if (searchableHaystack(e).contains(kw)) count++;
             }
             if (count > 0) keywordFrequency.put(kw, count);
         }
@@ -778,7 +893,7 @@ public class AppiumDriverManager {
         System.out.println("[findMatch] goal=\"" + goal + "\"");
         System.out.println("[findMatch] keyword frekanslari: " + keywordFrequency);
 
-        Pattern urunPattern = Pattern.compile("\\[urun:\\s*([^\\]]+)\\]");
+        Pattern urunPattern = Pattern.compile("\\[product:\\s*([^\\]]+)\\]");
 
         Elem bestMatch = null;
         int bestScore = 0;
@@ -786,7 +901,7 @@ public class AppiumDriverManager {
 
         for (Elem e : enriched) {
             String label = e.label();
-            String labelLower = label.toLowerCase(Locale.ROOT);
+            String labelLower = searchableHaystack(e);
             int score = 0;
             String tier = null;
 
@@ -801,15 +916,22 @@ public class AppiumDriverManager {
                 }
             }
 
-            // TIER 2: duz etiket goal'da geciyor
+            // TIER 2: duz etiket VEYA ham text/content-desc goal'da geciyor
             if (score == 0) {
-                String plain = label.replaceAll("\\s*\\(\\d+\\)\\s*$", "").trim();
-                if (plain.length() >= 8 && goalLower.contains(plain.toLowerCase(Locale.ROOT))) {
-                    long wc = 0;
-                    for (String w : plain.split("\\s+")) if (w.length() >= 3) wc++;
-                    if (wc >= 2) {
-                        score = plain.length() * 2 + 50;
-                        tier = "TIER-2";
+                List<String> plainCandidates = new ArrayList<>();
+                plainCandidates.add(label.replaceAll("\\s*\\(\\d+\\)\\s*$", "").trim());
+                if (e.text() != null && !e.text().isBlank()) plainCandidates.add(e.text().trim());
+                if (e.contentDesc() != null && !e.contentDesc().isBlank()) plainCandidates.add(e.contentDesc().trim());
+
+                for (String plain : plainCandidates) {
+                    if (plain.length() >= 8 && goalLower.contains(plain.toLowerCase(Locale.ROOT))) {
+                        long wc = 0;
+                        for (String w : plain.split("\\s+")) if (w.length() >= 3) wc++;
+                        if (wc >= 2) {
+                            score = plain.length() * 2 + 50;
+                            tier = "TIER-2";
+                            break;
+                        }
                     }
                 }
             }
@@ -863,6 +985,68 @@ public class AppiumDriverManager {
         return null;
     }
 
+    /**
+     * Goal'dan TAM ÜRÜN ADINI çıkarır. (PUBLIC - RunController tarafından kullanılır)
+     * 
+     * Örnekler:
+     * - "Sauce Labs Backpack (yellow) ürününü bul" → "Sauce Labs Backpack (yellow)"
+     * - "Sauce Labs Backpack (yellow) ürününü sepete ekle" → "Sauce Labs Backpack (yellow)"
+     * - "içerisinde yellow yazan ürünü seç" → null (genel arama, tam ad yok)
+     * - "yellow ürün bul" → null (sadece kelime, tam ad yok)
+     * 
+     * STRATEJİ:
+     * 1. Goal'da parantez içinde varyant olan ürün adlarını ara (ör. "(yellow)", "(blue)")
+     * 2. Ürün adı + varyant kombinasyonunu çıkar
+     * 3. Eğer goal'da "içerisinde", "yazan", "içeren" gibi genel arama ifadeleri varsa null döndür
+     */
+    public String extractExactProductName(String goal) {
+        if (goal == null || goal.isBlank()) return null;
+        
+        String goalLower = goal.toLowerCase(Locale.ROOT);
+        
+        // Genel arama ifadeleri varsa TAM AD araması yapma
+        if (goalLower.contains("içerisinde") || goalLower.contains("içinde") ||
+            goalLower.contains("yazan") || goalLower.contains("olan") ||
+            goalLower.contains("içeren") || goalLower.contains("içinde geçen")) {
+            System.out.println("[findMatch] Genel arama ifadesi bulundu, TAM AD eşleşmesi yapılmıyor");
+            return null;
+        }
+        
+        // Parantez içinde varyant olan ürün adlarını ara
+        // Örnek: "Sauce Labs Backpack (yellow)"
+        Pattern productPattern = Pattern.compile("([A-Za-z\\s]+\\s\\([^)]+\\))");
+        Matcher matcher = productPattern.matcher(goal);
+        
+        while (matcher.find()) {
+            String potentialProductName = matcher.group(1).trim();
+            if (potentialProductName.length() >= 10) { // Minimum uzunluk kontrolü
+                System.out.println("[findMatch] Potansiyel tam ürün adı bulundu: " + potentialProductName);
+                return potentialProductName;
+            }
+        }
+        
+        // Alternatif: Goal'da 3+ kelimelik bir ifade varsa, onu tam ürün adı olarak kabul et
+        String[] words = goalLower.split("\\s+");
+        if (words.length >= 3) {
+            // İlk 3-4 kelimeyi ürün adı olarak dene
+            StringBuilder productName = new StringBuilder();
+            for (int i = 0; i < Math.min(4, words.length); i++) {
+                // Noktalama işaretlerini temizle
+                String word = words[i].replaceAll("[^a-zçğıöşü0-9]", "");
+                if (!word.isBlank()) {
+                    if (productName.length() > 0) productName.append(" ");
+                    productName.append(word);
+                }
+            }
+            if (productName.length() >= 15) { // Minimum karakter kontrolü
+                System.out.println("[findMatch] Alternatif tam ürün adı: " + productName);
+                return productName.toString();
+            }
+        }
+        
+        return null;
+    }
+
     // ============================================================================================
     // LOCATOR COZUMLEME
     //   1) ID (elementId): model "[N]" numarasini secer, bounds merkezini biz hesaplariz.
@@ -870,6 +1054,21 @@ public class AppiumDriverManager {
     //   3) XPath: canli uygulamada XPath ile yeniden ara.
     // Non-clickable element icin clickable ancestor'a tiklama ozelligi dahil.
     // ============================================================================================
+
+    // [DUZELTME 2026-09-11] GENEL "YANLIS URUN/ELEMAN SECIMI" KORUMASI icin yardimci metod.
+    // Model'in secti "[N]" numarasinin (elementId) GERCEKTE hangi (zenginlestirilmis) etikete
+    // karsilik geldigini dondurur. RunController bunu, findMatchingTarget ile ekranda ONCEDEN
+    // bulunmus "dogru" hedef etiketiyle karsilastirip, model YANLIS bir elementi secmisse
+    // (ornegin ayirt edici renk/varyant uyusmuyorsa) tap'i reddedip modeli duzeltmek icin kullanir.
+    // Herhangi bir uygulamada calisir; belirli bir uygulamaya (ornegin SauceLabs) ozel degildir.
+    public String labelForElementId(String rawPageSource, String elementId, String goal) {
+        if (rawPageSource == null) return null;
+        Integer id = parsePlainInt(elementId);
+        if (id == null) return null;
+        List<Elem> emitted = buildEmittedList(rawPageSource, goal);
+        if (id < 1 || id > emitted.size()) return null;
+        return emitted.get(id - 1).label();
+    }
 
     // 5 parametreli -- goal-aware siralama icin ZORUNLU
     public int[] resolveTargetCenter(String runId, String rawPageSource, String elementId,

@@ -78,6 +78,10 @@ public class Run {//bir testin tüm durumu
     public void setRecordVideo(boolean recordVideo) { this.recordVideo = recordVideo; }
 
     private String failureScreenshot;
+    
+    // [YENI 2026-09-14] Fail sonrası scroll ile bulunan hedef - eğer LLM yine fail verirse otomatik tap yap
+    private String autoTapTarget;
+    private String autoTapReason;
     private boolean hasVideo;
 
 
@@ -85,6 +89,12 @@ public class Run {//bir testin tüm durumu
     public void setFailureScreenshot(String failureScreenshot) { this.failureScreenshot = failureScreenshot; }
     public boolean isHasVideo() { return hasVideo; }
     public void setHasVideo(boolean hasVideo) { this.hasVideo = hasVideo; }
+    
+    // [YENI 2026-09-14] Auto-tap için getter/setter
+    public String getAutoTapTarget() { return autoTapTarget; }
+    public void setAutoTapTarget(String autoTapTarget) { this.autoTapTarget = autoTapTarget; }
+    public String getAutoTapReason() { return autoTapReason; }
+    public void setAutoTapReason(String autoTapReason) { this.autoTapReason = autoTapReason; }
 
     // Proje seçilmeden oluşturulan testlerde (ya da nightly suite'te) bu alanlar
     // null kalır — sadece createdBy ve startedAt/finishedAt dolu olur.
