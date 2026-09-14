@@ -407,6 +407,9 @@ public class LlmAgent {
         
         // Her başarılı adım için kontrol et (failed adimlari atla)
         for (RunStep runStep : previousSteps) {
+            if ("failed".equalsIgnoreCase(runStep.getAction())) {
+                continue;
+            }
             // Not: RunStep'te status field'i yok, bu yüzden sadece action/target'a bak
             String target = runStep.getTarget() != null ? runStep.getTarget().toLowerCase() : "";
             String action = runStep.getAction() != null ? runStep.getAction().toLowerCase() : "";
@@ -482,12 +485,15 @@ public class LlmAgent {
                 int start = Math.max(0, previousSteps.size() - 10);
                 for (int i = start; i < previousSteps.size(); i++) {
                     RunStep s = previousSteps.get(i);
-                    // RunStep'te status field'i yok, sadece ✅ göster
-                    historyText.append("- ✅ ").append(s.getStep()).append(". adım: ")
+                    boolean failed = "failed".equalsIgnoreCase(s.getAction());
+                    historyText.append("- ").append(failed ? "❌ BAŞARISIZ" : "✅ BAŞARILI")
+                            .append(" ").append(s.getStep()).append(". adım: ")
                             .append(s.getAction()).append(" -> ").append(s.getTarget())
                             .append(" (").append(s.getReasoning()).append(")\n");
                 }
                 historyText.append("\n");
+                historyText.append("Yalnızca ✅ BAŞARILI kayıtları tamamlanmış kabul et; ❌ BAŞARISIZ kayıtları tekrar etme, ")
+                        .append("bunlar sistemin reddettiği veya gerçekleşmeyen denemelerdir.\n\n");
                 
                 // [YENİ 2026-09-14] MULTI-STEP DURUM ANALİZİ
                 // Modelin hangi adımda olduğunu anlaması için otomatik analiz
@@ -708,17 +714,40 @@ public class LlmAgent {
                     + "(bir kullanici bunu serbest metin olarak yazdi). Bu metni NUMARASIZ, ATOMIK "
                     + "adimlar halinde yeniden yaz. Kurallar:\n"
                     + "1) Metindeki her ayri eylemi (nokta/virgul/\"ve\"/\"sonra\" ile ayrilan kisimlari) "
-                    + "AYRI bir satir yap. Satirlarin basina numara veya madde imi koyma.\n"
-                    + "2) Her adim KISA olmali ve TEK bir eylem icermeli (orn: \"Login butonuna bas\").\n"
-                    + "3) AYNI anlami ve AYNI hedefi KORU; yeni bir eylem/adim EKLEME ve mevcut bir "
-                    + "adimi ATLAMA.\n"
+                    + "AYRI bir satir yap. Satirlarin basina numara veya madde imi koyma. \"Sonra\" gibi "
+                    + "baglaclari satir basinda tekrarlama.\n"
+                    + "2) Her adim KISA olmali ve SADECE TEK bir eylem icermeli. Bir cumlede birden fazla "
+                    + "eylem varsa mutlaka bol. Genel kural olarak \"[X] menusunden/menuden [Y] secenegine "
+                    + "tikla\" ifadesini \"[X] menu butonuna tikla\" ve \"[Y] secenegine tikla\" olarak "
+                    + "iki ayri adima ayir; X ve Y yerine metindeki ifadeleri aynen kullan. "
+                    + "\"bulana kadar kaydir\" veya \"gorunene kadar kaydir\" tek bir kaydirma adimidir; "
+                    + "ardindan gelen \"bulunca tikla\" veya \"bul ve tikla\" ifadesini, bulunan hedefe "
+                    + "tiklama adimi olarak ayir. Ayni kural urun, buton, kart, link, sekme ve ekran "
+                    + "adlari icin de gecerlidir.\n"
+                    + "3) AYNI anlami ve AYNI hedefi KORU; kullanicinin tek bir eylem olarak tarif ettigi "
+                    + "eylemi ikiye bolme, ancak ayni cumlede acikca bulunan iki farkli tiklama/navigasyon "
+                    + "eylemini ayir. Yeni bir hedef, urun, buton veya ekran UYDURMA ve adim ATLAMA.\n"
                     + "4) Kullanicinin metninde gecen somut degerleri (urun adi, kullanici adi, sifre, "
                     + "sayi, degisken vb.) OLDUGU GIBI, harf/yazim degistirmeden AYNEN koru.\n"
                     + "5) Kullanicinin metninde ACIKCA belirtilmeyen hicbir buton/alan/ekran/element "
                     + "ismi UYDURMA; kullanici hangi ifadeyi kullandiysa adimlarda da ayni/benzer genel "
                     + "ifadeyi kullan.\n"
-                    + "6) SADECE adimlari alt alta dondur, baska hicbir aciklama, baslik, etiket "
+                    + "6) Her adimi ayri satira yaz ve satirlar arasinda mutlaka yeni satir karakteri kullan; "
+                    + "iki ayri adimi ayni satirda birlestirme. SADECE adimlari alt alta dondur, baska hicbir aciklama, baslik, etiket "
                     + "veya tirnak ekleme.\n\n"
+                    + "Genel donusum ornegi:\n"
+                    + "Girdi: uygulamayı aç. Sauce Labs Backpack (yellow) ürünü bulana kadar kaydır. "
+                    + "bulunca tıkla. sonra sol menuden catalog seçeneğine tıkla. "
+                    + "Sauce Labs Backpack (orange) ürününü bul ve tıkla. sonra testi bitir.\n"
+                    + "Cikti:\n"
+                    + "Uygulamayı aç\n"
+                    + "Sauce Labs Backpack (yellow) ürünü görünene kadar ekranı kaydır\n"
+                    + "Sauce Labs Backpack (yellow) ürününe tıkla\n"
+                    + "Sol menü butonuna tıkla\n"
+                    + "Catalog seçeneğine tıkla\n"
+                    + "Sauce Labs Backpack (orange) ürünü görünene kadar ekranı kaydır\n"
+                    + "Sauce Labs Backpack (orange) ürününe tıkla\n"
+                    + "Testi bitir\n\n"
                     + "Metin: " + rawText;
 
             var messages = mapper.createArrayNode();
@@ -754,7 +783,7 @@ public class LlmAgent {
                 JsonNode root = mapper.readTree(responseBody);
                 String content = root.at("/choices/0/message/content").asText();
                 if (content == null || content.isBlank()) return rawText;
-                return removeStepNumbering(content.trim().replaceAll("^\"|\"$", ""));
+                return formatImprovedSteps(removeStepNumbering(content.trim().replaceAll("^\"|\"$", "")));
             }
         } catch (IOException e) {
             throw new RuntimeException("Metin iyileştirilirken hata oluştu", e);
@@ -766,6 +795,14 @@ public class LlmAgent {
                 .map(String::trim)
                 .filter(line -> !line.isEmpty())
                 .map(line -> line.replaceFirst("^(?:\\d+[.)]|[-*•])\\s*", ""))
+                .collect(java.util.stream.Collectors.joining("\n"));
+    }
+
+    private String formatImprovedSteps(String content) {
+        return content.lines()
+                .map(String::trim)
+                .filter(line -> !line.isEmpty())
+                .map(line -> line.replaceFirst("[.!?]+$", "") + ".")
                 .collect(java.util.stream.Collectors.joining("\n"));
     }
 
