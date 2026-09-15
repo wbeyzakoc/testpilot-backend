@@ -33,14 +33,33 @@ import java.util.stream.Collectors;
 @CrossOrigin(origins = "*")
 public class RunController {
 
-    // Maksimum adım sayısı artık sabit değil, panelden (AppSettings) okunuyor —
-    // bkz. executeRun içindeki maxSteps değişkeni.
     private static final List<String> INFO_LINK_KEYWORDS = List.of(
             "learn more", "daha fazla bilgi", "hakkında", "detaylar", "more info", "öğren", "about"
     );
 
-    // Test adı boş bırakılırsa (kullanıcı yazmadıysa) goal'dan kısa bir isim türetilir,
-    // böylece history'de her satır "giriş yap" gibi ayırt edilemez kalmaz.
+    // Product Tour / Onboarding Tour overlay tespit ve atlama için keyword'ler
+    private static final List<String> TOUR_SKIP_KEYWORDS = List.of(
+            // İngilizce
+            "skip", "next", "got it", "continue", "start", "let's go", "let us go", 
+            "get started", "begin", "finish", "done", "close", "dismiss",
+            // Türkçe
+            "atla", "ileri", "devam", "anladım", "anladim", "başla", "basla",
+            "kapat", "tamam", "hadi başlayalım", "hadi baslayalım"
+    );
+
+    private static final List<String> TOUR_INDICATOR_KEYWORDS = List.of(
+            // İngilizce
+            "tour", "onboarding", "welcome", "getting started", "introduction", 
+            "step", "slide", "carousel",
+            // Türkçe
+            "tur", "hoş geldiniz", "hos geldiniz", "karşılama", "karsılama",
+            "tanıtım", "tanitim", "giriş", "giris"
+    );
+
+    // ============================================================================================
+    // TEMEL DTO / REST ENDPOINT'LER
+    // ============================================================================================
+
     private String resolveName(String name, String goal) {
         if (name != null && !name.isBlank()) return name.trim();
         if (goal == null || goal.isBlank()) return "İsimsiz Test";
@@ -88,12 +107,8 @@ public class RunController {
     }
 
     // ============================================================================================
-    // ADIM NIYETI SINIFLANDIRMA (deterministik yürütme için)
+    // ADIM NIYETI SINIFLANDIRMA
     // ============================================================================================
-    // Kullanıcı senaryoyu madde madde (atomik) verdiğinde, her adımın ne yapması gerektiği
-    // ifadeden anlaşılabilir. Bunu LLM'in her adımda yeniden yorumlamasına bırakmak yerine,
-    // adımın niyetini deterministik olarak sınıflandırıp yaygın durumları (uygulama aç, kaydır,
-    // tıkla, testi bitir) DOĞRUDAN yürütüyoruz. Yalnızca gerçekten belirsiz adımlar LLM'e düşer.
     private enum StepIntent { OPEN_APP, FINISH, SCROLL_UNTIL, SCROLL_ONCE, TAP, TYPE, UNKNOWN }
 
     private String stripTrailingPunctuation(String s) {
@@ -102,6 +117,8 @@ public class RunController {
 
     private StepIntent classifyStep(String step) {
         if (step == null || step.isBlank()) return StepIntent.UNKNOWN;
+        
+        // ÖNCE: Product Tour / Onboarding overlay kontrolü (runId buradan geçmiyor, farklı yerde çağrılacak)
         String s = stripTrailingPunctuation(step.toLowerCase(Locale.ROOT));
 
         if (isApplicationOpenStep(step)) return StepIntent.OPEN_APP;
@@ -136,7 +153,6 @@ public class RunController {
         return StepIntent.UNKNOWN;
     }
 
-
     private boolean isInformationalLink(String target) {
         if (target == null) return false;
         String t = target.toLowerCase();
@@ -144,150 +160,119 @@ public class RunController {
     }
 
     // ============================================================================================
-    // HEDEF TAMAMLAMA KONTROLÜ (testi bitir)
+    // HEDEF TAMAMLAMA KONTROLÜ
     // ============================================================================================
-    // Bir tap işleminden sonra ekran değiştiyse ve hedef element artık yeni ekranda
-    // görünmüyorsa, bu hedefe ulaşılmış ve yeni bir ekrana geçilmiş demektir.
-    // Bu durumda test tamamlanabilir (goal contains "tıkla ve testi bitir" pattern'i).
-    // 
-    // ÖNEMLİ: Sadece TAM EŞLEŞEN ürünler için tamamlanma kabul edilir.
-    // Örn: Goal "Sauce Labs Backpack (yellow)" ise, "Sauce Labs Backpack" (renksiz)
-    // veya "Sauce Labs Backpack (blue)" (yanlış renk) TAMAMLAMA sayılmaz!
-    private boolean isGoalCompleted(String runId, String goal, String target, 
+    private boolean isGoalCompleted(String runId, String goal, String target,
                                     String pageSourceBeforeTap, String pageSourceAfterTap) {
         if (target == null || pageSourceBeforeTap == null || pageSourceAfterTap == null) {
             return false;
         }
-        
-        // Ekran değişmediyse tamamlanma yok
+
         if (pageSourceBeforeTap.equals(pageSourceAfterTap)) {
             System.out.println("[GOAL-COMPLETE] Ekran değişmedi, tamamlanma yok");
             return false;
         }
-        
-        // Hedef element yeni ekranda yoksa -> başarıyla tıklanmış ve ekran değişmiş
+
         boolean targetGone = !pageSourceAfterTap.contains(target);
-        
+
         if (!targetGone) {
             System.out.println("[GOAL-COMPLETE] Hedef hala yeni ekranda var, tamamlanma yok");
             return false;
         }
-        
-        // [DUZELTME 2026-09-14] MULTI-STEP SENARYO KONTROLÜ
-        // Goal'da "sonra" veya "ve sonra" varsa -> bu multi-step senaryo!
-        // Bu durumda SADECE SON ÜRÜN tıklandıktan sonra tamamlanma yapılır.
-        boolean isMultiStep = goal != null && (goal.toLowerCase().contains("sonra") || 
-                                               goal.toLowerCase().contains("ve sonra"));
-        
+
+        boolean isMultiStep = goal != null && (goal.toLowerCase().contains("sonra") ||
+                goal.toLowerCase().contains("ve sonra"));
+
         if (isMultiStep) {
             System.out.println("[GOAL-COMPLETE] 🔄 MULTI-STEP SENARYO TESPİT EDİLDİ");
-            
-            // Goal'daki SON ürünü bul (en son gelen renk/variyant)
+
             String lastProductInGoal = findLastProductInGoal(goal);
             System.out.println("[GOAL-COMPLETE] Son hedef ürün: '" + lastProductInGoal + "'");
-            
+
             if (lastProductInGoal != null) {
-                // Şu an tıklanan ürün, goal'daki SON ürün mü?
                 if (!target.contains(lastProductInGoal)) {
                     System.out.println("[GOAL-COMPLETE] ✗ HENÜZ SON ÜRÜN TIKLANMADI!");
                     System.out.println("[GOAL-COMPLETE] Tıklanan: '" + target + "'");
                     System.out.println("[GOAL-COMPLETE] Beklenen son ürün: '" + lastProductInGoal + "'");
-                    return false; // Henüz son ürüne tıklanmadı! Tamamlanma YOK!
+                    return false;
                 } else {
                     System.out.println("[GOAL-COMPLETE] ✓ SON ÜRÜN TIKLANDI: '" + lastProductInGoal + "'");
                 }
             }
         }
-        
-        // Goal "tıkla ve testi bitir" pattern'i içeriyor mu?
-        boolean goalRequiresCompletion = goal != null && goal.toLowerCase().contains("tıkla") && 
-                                         (goal.toLowerCase().contains("bitir") || 
-                                          goal.toLowerCase().contains("sonlandır") ||
-                                          goal.toLowerCase().contains("tamamla"));
-        
-        // Goal "bul ve tıkla" pattern'i içeriyor mu? (ürün seçimi senaryosu)
-        // [DUZELTME] Multi-step ise BU KONTROLÜ YAPMA!
-        boolean goalIsProductSelection = !isMultiStep && 
-                                         goal != null && 
-                                         (goal.toLowerCase().contains("bul") || 
-                                          goal.toLowerCase().contains("seç") ||
-                                          goal.toLowerCase().contains("tap")) &&
-                                         !goal.toLowerCase().contains("sonra") &&
-                                         !goal.toLowerCase().contains("ve sonra");
-        
-        // [YENİ 2026-09-14] TAM EŞLEŞME KONTROLÜ
-        // Goal'da parantez içinde renk/variyant bilgisi varsa (örn: "(yellow)"),
-        // target da aynı parantezli bilgiyi içermeli. Aksi halde TAMAMLANMA sayılmaz!
+
+        boolean goalRequiresCompletion = goal != null && goal.toLowerCase().contains("tıkla") &&
+                (goal.toLowerCase().contains("bitir") ||
+                        goal.toLowerCase().contains("sonlandır") ||
+                        goal.toLowerCase().contains("tamamla"));
+
+        boolean goalIsProductSelection = !isMultiStep &&
+                goal != null &&
+                (goal.toLowerCase().contains("bul") ||
+                        goal.toLowerCase().contains("seç") ||
+                        goal.toLowerCase().contains("tap")) &&
+                !goal.toLowerCase().contains("sonra") &&
+                !goal.toLowerCase().contains("ve sonra");
+
         if (goal != null && goal.contains("(") && goal.contains(")")) {
-            // Goal'da parantezli bilgi var - target da aynı parantezli bilgiyi içermeli
             int parenStart = goal.indexOf("(");
             int parenEnd = goal.indexOf(")");
-            String goalParenContent = goal.substring(parenStart, parenEnd + 1); // "(yellow)"
-            
-            // Target bu parantezli bilgiyi içeriyor mu?
+            String goalParenContent = goal.substring(parenStart, parenEnd + 1);
+
             boolean targetHasExactParenInfo = target != null && target.contains(goalParenContent);
-            
+
             if (!targetHasExactParenInfo) {
-                System.out.println("[GOAL-COMPLETE] ⚠ TAM EŞLEŞME YOK! Goal: '" + goal + 
-                                 "', Target: '" + target + "', Eksik: '" + goalParenContent + "'");
+                System.out.println("[GOAL-COMPLETE] ⚠ TAM EŞLEŞME YOK! Goal: '" + goal +
+                        "', Target: '" + target + "', Eksik: '" + goalParenContent + "'");
                 System.out.println("[GOAL-COMPLETE] Yanlış ürün tıklandı, tamamlanma REDDEDİLDİ");
-                return false; // Yanlış ürün! Tamamlanma sayılmaz.
+                return false;
             } else {
-                System.out.println("[GOAL-COMPLETE] ✓ TAM EŞLEŞME: '" + goalParenContent + 
-                                 "' target'ta mevcut");
+                System.out.println("[GOAL-COMPLETE] ✓ TAM EŞLEŞME: '" + goalParenContent +
+                        "' target'ta mevcut");
             }
         }
-        
+
         boolean canComplete = targetGone && (goalRequiresCompletion || goalIsProductSelection);
-        
+
         if (canComplete) {
             System.out.println("[GOAL-COMPLETE] ✓ Tamamlanma koşulları sağlandı");
         } else {
             System.out.println("[GOAL-COMPLETE] Tamamlanma koşulları sağlanmadı");
         }
-        
+
         return canComplete;
     }
 
-    // Goal'daki SON ürün adını bulur (en son gelen [product: X] veya parantezli renk bilgisi)
     private String findLastProductInGoal(String goal) {
         if (goal == null) return null;
-        
-        // "[product: X]" pattern'ini ara (en sonuncusunu bul)
+
         int lastProductIndex = goal.lastIndexOf("[product:");
         if (lastProductIndex >= 0) {
-            int start = lastProductIndex + 9; // "[product: ".length()
+            int start = lastProductIndex + 9;
             int end = goal.indexOf("]", start);
             if (end > start) {
                 return goal.substring(start, end);
             }
         }
-        
-        // "[product: X]" yoksa, goal'daki SON parantezli bilgiyi bul (örn: "(orange)")
-        // ve ondan ÖNCE gelen ürün ismini al
+
         int lastParenStart = goal.lastIndexOf("(");
         int lastParenEnd = goal.lastIndexOf(")");
-        
+
         if (lastParenStart >= 0 && lastParenEnd > lastParenStart) {
-            String parenContent = goal.substring(lastParenStart, lastParenEnd + 1); // "(orange)"
-            
-            // Parantezden ÖNCEki metni al
+            String parenContent = goal.substring(lastParenStart, lastParenEnd + 1);
+
             String beforeParen = goal.substring(0, lastParenStart);
-            
-            // Son kelimeyi bul (ürün adı)
+
             String[] words = beforeParen.trim().split("\\s+");
             if (words.length > 0) {
                 String productName = words[words.length - 1];
                 return productName + parenContent;
             }
         }
-        
+
         return null;
     }
 
-    // [DUZELTME 2026-09-10] Modelin dondurdugu elementId'yi int'e cevirir. Sadece saf rakam
-    // kabul edilir ("7", "25"). "abc", "", null veya aralik disi -> null. Tap/type icin
-    // elementId zorunlu oldugundan, bu metot null donerse action GECERSIZ sayilir.
     private Integer parseElementId(String s) {
         if (s == null) return null;
         String t = s.trim();
@@ -300,25 +285,21 @@ public class RunController {
     }
 
     // ============================================================================================
-    // OTOMATIK KAYDIRMA (element bulunamadiginda)
+    // OTOMATIK KAYDIRMA
     // ============================================================================================
     private static final int NOT_FOUND_SCROLL_THRESHOLD = 1;
     private static final int MAX_AUTO_SCROLLS = 8;
     private static final String[] AUTO_SCROLL_DIRECTIONS = {"down", "down", "down", "down", "down", "down", "down", "up"};
+    private static final int POST_SCROLL_RESCAN_ATTEMPTS = 3;
+    private static final int POST_SCROLL_RESCAN_DELAY_MS = 250;
 
     private record AutoScrollOutcome(boolean scrolled, boolean exhausted, String direction, boolean effective, String newPageSource) {}
+    private record TargetProbe(String found, int[] center, boolean hasTarget, boolean interactable, String pageSource) {}
 
     private String turkishDirection(String direction) {
         return "down".equals(direction) ? "aşağı" : "yukarı";
     }
 
-    // [DUZELTME 2026-09-14] Swipe gercekten ekrani degistirdi mi kontrolu + YENI PAGE SOURCE donusu.
-    // ONCEKI SORUN: swipe() cagriliyordu ama ekran gercekten kaydi mi diye hic bakilmiyordu --
-    // hedef bir konteynerde scroll edilemiyorsa (sabit form) ya da klavye/overlay tarafindan
-    // kapatilmissa, swipe hicbir sey degistirmiyor ama sistem yine de "basariyla kaydirdim" diyip
-    // ayni basarisizligi kor kor tekrarliyordu (bkz. LOGIN butonu sikayeti). Simdi swipe
-    // oncesi/sonrasi sayfa kaynagi karsilastiriliyor; degismediyse effective=false donuyor.
-    // YENI: Scroll sonrası YENİ page source da döndürülüyor ki arama tekrarlanabilsin.
     private AutoScrollOutcome autoScrollIfNeeded(String runId, String rawPageSourceBeforeScroll,
                                                  int[] notFoundStreak, int[] autoScrollAttempts) {
         notFoundStreak[0]++;
@@ -328,10 +309,10 @@ public class RunController {
         if (autoScrollAttempts[0] >= MAX_AUTO_SCROLLS) {
             return new AutoScrollOutcome(false, true, null, false, rawPageSourceBeforeScroll);
         }
-        
+
         String direction = AUTO_SCROLL_DIRECTIONS[autoScrollAttempts[0] % AUTO_SCROLL_DIRECTIONS.length];
         System.out.println("[AUTO-SCROLL] Kaydırma yapılıyor... (deneme: " + (autoScrollAttempts[0] + 1) + "/" + MAX_AUTO_SCROLLS + ", yön: " + turkishDirection(direction) + ")");
-        
+
         appiumDriverManager.swipe(runId, direction);
         autoScrollAttempts[0]++;
         notFoundStreak[0] = 0;
@@ -339,10 +320,10 @@ public class RunController {
         boolean effective = true;
         String newPageSource = rawPageSourceBeforeScroll;
         try {
-            Thread.sleep(1000); // Ekranın yüklenmesi için bekle
+            Thread.sleep(1000);
             newPageSource = appiumDriverManager.getPageSource(runId);
             effective = rawPageSourceBeforeScroll == null || !rawPageSourceBeforeScroll.equals(newPageSource);
-            
+
             if (effective) {
                 System.out.println("[AUTO-SCROLL] ✓ BAŞARILI - Ekran içeriği değişti, YENİ XML alındı");
                 System.out.println("[AUTO-SCROLL] Yeni XML uzunluğu: " + (newPageSource != null ? newPageSource.length() : 0) + " karakter");
@@ -358,14 +339,130 @@ public class RunController {
     }
 
     // ============================================================================================
-    // HEDEF-HEDEF EŞLEŞME KONTROLÜ (tam eşleşme mi?)
+    // probeTargetOnPage -- [TAMAMEN YENİDEN YAZILDI 2026-09-15]
+    //
+    // Bir sayfada stepGoal'a uyan hedefi arar. Şu bilgileri döner:
+    //   - found: bulunan elementin etiketi (null ise bulunamadı)
+    //   - center: hedefin tap koordinatı (null ise hesaplanamadı)
+    //   - hasTarget: metin/marka/varyant eşleşmesi tam mı?
+    //   - interactable: bulundu VE aktif VE koordinat geçerli mi?
+    //   - pageSource: kullanılan XML (üst katmanın tekrar kullanması için)
+    //
+    // ÖNCEKİ SORUNLAR:
+    //   1. Devre dışı kontrolü hasTarget=true dönerken center'ı null bırakıyordu, bu da
+    //      üst katmanın "hedef bulundu ama etkileşilemez" durumunu yanlış yorumlamasına
+    //      ve gereksiz scroll fallback'ine düşmesine yol açıyordu.
+    //   2. Locator bilgisi loglanmıyordu, debug zordu.
+    //   3. resolveTargetCenter null dönerse bile hasTarget=true kalıyordu, ama
+    //      interactable=false oluyordu. Bu doğru davranış ama log eksikti.
+    //
+    // YENİ DAVRANIŞ:
+    //   - Devre dışı element için hasTarget=true, interactable=false, center=null.
+    //   - Her durumda locator bilgisi loglanır.
+    //   - Koordinat çözülemezse neden çözülemediği loglanır.
     // ============================================================================================
-    // Goal ile ekranda bulunan elementin TAM olarak eşleşip eşleşmediğini kontrol eder.
-    // Parantez içindeki renk/variyant bilgisi de dahil HER ŞEY eşleşmelidir.
-    // Örn: Goal "Sauce Labs Backpack (violet)" vs Target "Sauce Labs Backpack (green)" -> false
-    // Bir metindeki TÜM parantezli varyant token'larını (renk/isim) döndürür.
-    // Örn: "... (yellow) ... (orange) ..." -> ["yellow", "orange"].
-    // Sadece indeks olan sayısal token'lar ("(4)") ELENIR; bunlar varyant değildir.
+    private TargetProbe probeTargetOnPage(String runId, String pageSource, String stepGoal) {
+        if (pageSource == null || stepGoal == null || stepGoal.isBlank()) {
+            return new TargetProbe(null, null, false, false, pageSource);
+        }
+
+        // ---- 1. Deterministik eşleştirme ----
+        String found = appiumDriverManager.findMatchingTarget(pageSource, stepGoal);
+
+        // ---- 2. Tam eşleşme kontrolleri (varyant / ürün adı) ----
+        boolean hasTarget = found != null
+                && targetsExactMatch(stepGoal, found)
+                && strictVariantMatch(stepGoal, found)
+                && exactProductPhraseMatch(stepGoal, found);
+
+        if (!hasTarget) {
+            // Bulundu ama tam eşleşmedi (yanlış varyant olabilir) → detaylı log
+            if (found != null) {
+                System.out.println("[probeTarget] ⚠ Kısmi eşleşme: '" + found
+                        + "' (goal='" + stepGoal + "') — tam eşleşme YOK");
+            } else {
+                System.out.println("[probeTarget] Hedef bulunamadı: '" + stepGoal + "'");
+            }
+            return new TargetProbe(found, null, false, false, pageSource);
+        }
+
+        // ---- 3. Locator bilgisini çıkar ve logla (hata ayıklama için çok faydalı) ----
+        AppiumDriverManager.ElementLocator locator =
+                appiumDriverManager.findElementLocatorByLabel(pageSource, found, stepGoal);
+        if (locator != null) {
+            System.out.println("[probeTarget] 📍 Hedef bulundu: \"" + found + "\"");
+            System.out.println("[probeTarget]    " + appiumDriverManager.formatLocatorForLog(locator));
+        } else {
+            System.out.println("[probeTarget] 📍 Hedef bulundu: \"" + found
+                    + "\" (locator detayı çıkarılamadı)");
+        }
+
+        // ---- 4. Devre dışı (enabled=false) kontrolü ----
+        // [DUZELTME 2026-09-15] Devre dışı element etkileşilebilir DEĞİLDİR.
+        // Üst katman (RunController) bu bilgiye göre scroll fallback'i atlayacak.
+        if (appiumDriverManager.isTargetDisabled(pageSource, found)) {
+            System.out.println("[probeTarget] ⚠ Hedef '" + found + "' DEVRE DIŞI (enabled=false)");
+            System.out.println("[probeTarget]    → Etkileşilebilir değil, tap denemesi YAPILMAMALI");
+            return new TargetProbe(found, null, true, false, pageSource);
+        }
+
+        // ---- 5. Koordinat çözümleme ----
+        // resolveTargetCenter 5 kademeli fallback kullanır (elementId, tam eşleşme,
+        // kısmi eşleşme, canlı XPath, canlı XML). Hata durumunda null döner.
+        int[] center = appiumDriverManager.resolveTargetCenter(
+                runId, pageSource, null, found, stepGoal);
+
+        if (center == null) {
+            System.out.println("[probeTarget] ⚠ Hedef '" + found
+                    + "' bulundu ama koordinat ÇÖZÜLEMEDİ (resolveTargetCenter null döndü)");
+            return new TargetProbe(found, null, true, false, pageSource);
+        }
+
+        // ---- 6. Koordinat geçerlilik kontrolleri ----
+        boolean isValidCoord = appiumDriverManager.isValidCoordinate(pageSource, center[0], center[1]);
+        boolean isOnViewport = appiumDriverManager.isCoordinateOnViewport(runId, center[0], center[1]);
+        boolean interactable = isValidCoord && isOnViewport;
+
+        if (!interactable) {
+            System.out.println("[probeTarget] ⚠ Hedef '" + found + "' koordinatı ("
+                    + center[0] + "," + center[1] + ") GEÇERSİZ:"
+                    + " isValidCoordinate=" + isValidCoord
+                    + ", isCoordinateOnViewport=" + isOnViewport);
+        } else {
+            System.out.println("[probeTarget] ✓ Hedef '" + found + "' etkileşilebilir"
+                    + " (koordinat: " + center[0] + "," + center[1] + ")");
+        }
+
+        return new TargetProbe(found, center, true, interactable, pageSource);
+    }
+
+    private TargetProbe rescanAfterScroll(String runId, String stepGoal, String initialPageSource) {
+        TargetProbe latestProbe = probeTargetOnPage(runId, initialPageSource, stepGoal);
+        if (latestProbe.interactable()) return latestProbe;
+
+        String latestPageSource = initialPageSource;
+        for (int attempt = 1; attempt <= POST_SCROLL_RESCAN_ATTEMPTS; attempt++) {
+            try {
+                Thread.sleep(POST_SCROLL_RESCAN_DELAY_MS);
+                latestPageSource = appiumDriverManager.getPageSource(runId);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception ex) {
+                // son bilinen kaynakla devam
+            }
+            latestProbe = probeTargetOnPage(runId, latestPageSource, stepGoal);
+            if (latestProbe.interactable()) {
+                System.out.println("[STEP] ✓ Scroll sonrası detaylı taramada hedef etkileşilebilir bulundu: " + latestProbe.found());
+                return latestProbe;
+            }
+        }
+        return latestProbe;
+    }
+
+    // ============================================================================================
+    // HEDEF-HEDEF EŞLEŞME KONTROLÜ
+    // ============================================================================================
     private java.util.List<String> extractVariantTokens(String s) {
         java.util.List<String> out = new java.util.ArrayList<>();
         if (s == null) return out;
@@ -379,29 +476,6 @@ public class RunController {
         return out;
     }
 
-    // ============================================================================================
-    // [DUZELTME 2026-09-14] ÇOK ADIMLI / ÇOK VARYANTLI HEDEF DESTEĞI
-    //
-    // ONCEKI SORUN: Sadece goal'daki İLK parantezi (goal.indexOf("(")) baz alıyordu.
-    // "... (yellow) ... sonra ... (orange) ..." gibi ÇOK ADIMLI bir senaryoda bu, HER tap'ın
-    // "(yellow)" içermesini zorluyordu; bu yüzden (a) geri dönmek için basılan navigasyon
-    // butonu ("View menu") ve (b) 3. adımdaki DOĞRU "(orange)" ürünü HARD-BLOCK ile
-    // engelleniyor, test 15 adımı boşa harcayıp başarısız oluyordu.
-    //
-    // YENİ DAVRANIŞ:
-    //   1) Goal'daki TÜM varyant token'ları toplanır (yellow, orange, ...).
-    //   2) Goal hiç varyant belirtmiyorsa kısıtlama yok -> geçerli.
-    //   3) Hedefin kendi varyant token'ı yoksa (geri butonu, "Finish", menü gibi navigasyon/
-    //      genel elementler) YANLIŞ-RENK ürünü DEĞİLDİR -> engelleme.
-    //   4) Hedefin varyantı goal varyantlarından HERHANGİ biriyle eşleşiyorsa -> geçerli.
-    //   5) Aksi halde (ör. goal {violet} ama target {green}) -> yanlış varyant, engelle.
-    // Böylece tek-hedefli goal'lardaki yanlış-renk koruması KORUNUR, çok-adımlı goal'lar ÇALIŞIR.
-    // ============================================================================================
-    // Deterministik yürütme için KATI varyant kontrolü.
-    // Adım bir varyant (renk/isim, ör. "(yellow)") belirtiyorsa, bulunan hedefin metni bu
-    // varyantı GERÇEKTEN içermelidir. targetsExactMatch'ten farkı: varyant taşımayan bir hedef
-    // (ör. renksiz "Sauce Labs Backpack") burada REDDEDILIR -- böylece kısmi eşleşen yanlış
-    // ürüne deterministik tıklama yapılmaz.
     private boolean strictVariantMatch(String stepGoal, String found) {
         if (stepGoal == null || found == null) return false;
         java.util.List<String> goalVariants = extractVariantTokens(stepGoal);
@@ -417,7 +491,47 @@ public class RunController {
         return false;
     }
 
-    private boolean targetsExactMatch(String goal, String target) {        if (goal == null || target == null) {
+    private String normalizeForMatch(String s) {
+        if (s == null) return "";
+        return s.toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-zçğıöşü0-9\\s]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    private boolean exactProductPhraseMatch(String stepGoal, String found) {
+        if (stepGoal == null || found == null) return false;
+        String exact = appiumDriverManager.extractExactProductName(stepGoal);
+        if (exact == null || exact.isBlank()) {
+            return true;
+        }
+
+        String exactNorm = normalizeForMatch(exact);
+        String foundNorm = normalizeForMatch(found);
+        if (exactNorm.isBlank() || foundNorm.isBlank()) {
+            return false;
+        }
+        if (foundNorm.contains(exactNorm)) {
+            return true;
+        }
+
+        java.util.LinkedHashSet<String> required = new java.util.LinkedHashSet<>();
+        for (String w : exactNorm.split("\\s+")) {
+            if (w.length() >= 3) required.add(w);
+        }
+        if (required.isEmpty()) return false;
+        for (String w : required) {
+            if (!foundNorm.contains(w)) {
+                System.out.println("[EXACT-MATCH] ⚠ Ürün adı eşleşmiyor: missing='" + w
+                        + "', exact='" + exact + "', found='" + found + "'");
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean targetsExactMatch(String goal, String target) {
+        if (goal == null || target == null) {
             return false;
         }
 
@@ -428,7 +542,6 @@ public class RunController {
 
         java.util.List<String> targetVariants = extractVariantTokens(target);
         if (targetVariants.isEmpty()) {
-            // Varyant taşımayan hedef = navigasyon/genel element -> yanlış ürün değil.
             return true;
         }
 
@@ -436,14 +549,14 @@ public class RunController {
             for (String gv : goalVariants) {
                 if (tv.equalsIgnoreCase(gv)) {
                     System.out.println("[EXACT-MATCH] ✓ Varyant eşleşti: '" + tv +
-                                     "' goal varyantlarında mevcut " + goalVariants);
+                            "' goal varyantlarında mevcut " + goalVariants);
                     return true;
                 }
             }
         }
 
         System.out.println("[EXACT-MATCH] ⚠ Varyant eşleşmiyor: target=" + targetVariants +
-                         ", goal=" + goalVariants);
+                ", goal=" + goalVariants);
         return false;
     }
 
@@ -698,8 +811,6 @@ public class RunController {
 
     private JsonNode toListItem(Run run) {
         ObjectNode item = objectMapper.valueToTree(run);
-        // History/dashboard listeleri bu alanları kullanmıyor. Özellikle hata
-        // ekran görüntüsü base64 olduğu için tüm geçmişi gereksiz yere büyütüyor.
         item.remove(List.of("failureScreenshot", "suggestions"));
         return item;
     }
@@ -730,8 +841,6 @@ public class RunController {
     @GetMapping("/{id}/screenshot")
     public Map<String, String> getScreenshot(@PathVariable String id) {
         String screenshot = liveScreenshots.get(id);
-        // Henüz ekran görüntüsü yoksa null döndür (frontend loading spinner gösterecek)
-        // Hata yerine boş response gönder
         if (screenshot == null) {
             return Map.of("screenshot", "");
         }
@@ -777,29 +886,259 @@ public class RunController {
         }
     }
 
+    // ============================================================================================
+    // [YENİ 2026-09-15] SİSTEM İZİN DİYALOĞU OTOMATİK YÖNETİMİ
+    //
+    // Uygulama senaryo sırasında aniden native izin diyaloğu açabilir. Bu diyaloglar
+    // modal katman olduğundan arkadaki element arama/tap işlemleri bloklanır. Bu
+    // helper, art arda açılan diyalogları (konum + bildirim + kişiler gibi) temizler.
+    // ============================================================================================
+    private String handleSystemDialogsIfAny(String runId, String rawPageSource, String context) {
+        String currentPageSource = rawPageSource;
+        int maxDialogs = 5; // güvenlik: sonsuz döngüye girmesin
+
+        for (int i = 0; i < maxDialogs; i++) {
+            AppiumDriverManager.PermissionDialogResult result =
+                    appiumDriverManager.tryHandleSystemPermissionDialog(runId, currentPageSource);
+
+            if (!result.handled()) {
+                break;
+            }
+
+            System.out.println("[RUN] 🔔 Sistem izin diyaloğu otomatik yanıtlandı (" + context
+                    + "): '" + result.buttonClicked() + "'"
+                    + (result.dialogTitle() != null ? " — \"" + result.dialogTitle() + "\"" : ""));
+
+            currentPageSource = result.newPageSource();
+        }
+        return currentPageSource;
+    }
+
+    // ============================================================================================
+    // [YENİ 2026-09-15] PRODUCT TOUR / ONBOARDING TOUR OVERLAY KONTROLÜ
+    //
+    // Ekranda Product Tour / Onboarding Tour overlay varsa otomatik olarak tespit eder
+    // ve "Skip", "Next", "Got it" gibi butonları tıklar veya ekrana tıklar.
+    // Senaryodan bağımsız olarak her adımda kontrol edilir.
+    // ============================================================================================
+    private void handleTourOverlay(String runId, String rawPageSource) {
+        try {
+            // 1. Tour overlay var mı kontrol et
+            List<String> allElements = appiumDriverManager.parseAllElementLabels(rawPageSource);
+            
+            boolean hasTourIndicator = allElements.stream()
+                    .anyMatch(e -> TOUR_INDICATOR_KEYWORDS.stream()
+                            .anyMatch(keyword -> e.toLowerCase(Locale.ROOT).contains(keyword)));
+            
+            if (!hasTourIndicator) {
+                // Tour indicator yok, kontrol etmeye gerek yok
+                return;
+            }
+            
+            System.out.println("[TOUR] 🎯 Product Tour / Onboarding overlay tespit edildi!");
+            System.out.println("[TOUR]   Ekrandaki elementler: " + allElements);
+            
+            // 2. Skip/Next butonu var mı ara
+            for (String skipKeyword : TOUR_SKIP_KEYWORDS) {
+                String finalSkipKeyword = skipKeyword;
+                boolean hasSkipButton = allElements.stream()
+                        .anyMatch(e -> e.toLowerCase(Locale.ROOT).contains(finalSkipKeyword));
+                
+                if (hasSkipButton) {
+                    System.out.println("[TOUR] ✓ Skip/Next butonu bulundu: \"" + skipKeyword + "\"");
+                    
+                    // Butonu bul ve tıkla
+                    AppiumDriverManager.ElementLocator locator =
+                            appiumDriverManager.findElementLocatorByLabel(rawPageSource, skipKeyword, "tour skip");
+                    
+                    if (locator != null) {
+                        int[] center = appiumDriverManager.resolveTargetCenter(
+                                runId, rawPageSource, null, skipKeyword, "tour skip");
+                        
+                        if (center != null) {
+                            System.out.println("[TOUR] ✓ Koordinat çözüldü: (" + center[0] + "," + center[1] + ")");
+                            try {
+                                appiumDriverManager.tap(runId, center[0], center[1]);
+                                System.out.println("[TOUR] ✓ Tour overlay butonu tıklandı: \"" + skipKeyword + "\"");
+                                Thread.sleep(500);
+                                return; // Tour kapatıldı, çık
+                            } catch (Exception tapEx) {
+                                System.out.println("[TOUR] ✗ Tap başarısız: " + tapEx.getMessage());
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 3. Skip butonu bulunamadı, ekranın ortasına tıkla (genellikle "Next" işlevi görür)
+            System.out.println("[TOUR] ⚠ Skip butonu bulunamadı, ekranın ortasına tıklanıyor...");
+            int[] screenSize = appiumDriverManager.getScreenSize(runId);
+            if (screenSize != null) {
+                int centerX = screenSize[0] / 2;
+                int centerY = screenSize[1] / 2;
+                System.out.println("[TOUR] ✓ Ekran ortası: (" + centerX + "," + centerY + ")");
+                try {
+                    appiumDriverManager.tap(runId, centerX, centerY);
+                    System.out.println("[TOUR] ✓ Ekran ortasına tıklandı (tour atlama)");
+                    Thread.sleep(500);
+                } catch (Exception tapEx) {
+                    System.out.println("[TOUR] ✗ Ekran ortası tıklama başarısız: " + tapEx.getMessage());
+                }
+            }
+            
+        } catch (Exception ex) {
+            System.out.println("[TOUR] ✗ Tour overlay kontrolü başarısız: " + ex.getMessage());
+        }
+    }
+
+    // ============================================================================================
+    // [YENİ 2026-09-15] EKRAN ANALİZİ FALLBACK
+    //
+    // Senaryo eksik/belirsiz olduğunda ya da bir adımda takıldığımızda çağrılır.
+    // LLM'e "bu ekranı analiz et ve hedefe göre sıradaki mantıklı adımı öner" der.
+    // Önerilen aksiyon doğrudan uygulanır.
+    //
+    // ADIMI İLERLETMEZ -- sadece tek bir sub-aksiyon yapar. Bir sonraki iterasyon
+    // güncel ekranla tekrar değerlendirir.
+    // ============================================================================================
+    private boolean tryScreenAnalysisFallback(Run run, String stepGoal, String rawPageSource,
+                                              int stepIndex, int[] analysisUsageCounter) {
+        // Per-run limit
+        if (analysisUsageCounter[0] >= 5) {
+            System.out.println("[ANALYZE] Limit doldu (5/5), bu adım için analiz yapılmıyor.");
+            return false;
+        }
+        analysisUsageCounter[0]++;
+
+        System.out.println("[ANALYZE] 🧠 Ekran analizi başlatılıyor (adım " + stepIndex
+                + ", kullanım: " + analysisUsageCounter[0] + "/5)...");
+
+        LlmAgent.ScreenAnalysisResult analysis;
+        try {
+            analysis = llmAgent.analyzeScreenAndPlanNextAction(
+                    run.getGoal(), stepGoal, rawPageSource, run.getSteps());
+        } catch (Exception analyzeEx) {
+            System.out.println("[ANALYZE] ✗ Analiz başarısız: " + analyzeEx.getMessage());
+            return false;
+        }
+
+        if (analysis == null || analysis.suggestedAction() == null) {
+            System.out.println("[ANALYZE] ✗ Analiz boş döndü");
+            return false;
+        }
+
+        System.out.println("[ANALYZE] 📱 Ekran: \"" + analysis.screenName() + "\"");
+        System.out.println("[ANALYZE] 🎯 Amaç: " + analysis.screenPurpose());
+        System.out.println("[ANALYZE] 🔧 Mevcut aksiyonlar: " + analysis.availableActions());
+        System.out.println("[ANALYZE] 📊 Güven: " + analysis.confidence());
+
+        AgentAction suggested = analysis.suggestedAction();
+        String actionType = suggested.getAction() == null ? "" : suggested.getAction().toLowerCase(Locale.ROOT);
+        System.out.println("[ANALYZE] ➡️  Önerilen: " + actionType + " → \"" + suggested.getTarget()
+                + "\" (" + suggested.getReasoning() + ")");
+
+        if (actionType.isBlank() || "fail".equals(actionType)) {
+            System.out.println("[ANALYZE] ✗ Analiz 'fail'/boş önerdi, fallback kullanılmıyor.");
+            return false;
+        }
+
+        if ("done".equals(actionType)) {
+            System.out.println("[ANALYZE] ✓ Analiz hedefe ulaşıldığını düşünüyor → test bitiriliyor");
+            run.getSteps().add(new RunStep(stepIndex, "done", null,
+                    "Ekran analizi hedefe ulaşıldığını tespit etti: " + analysis.screenPurpose()));
+            run.setStatus("passed");
+            run.setFinishedAt(Instant.now().toString());
+            runStore.save(run);
+            return true;
+        }
+
+        try {
+            switch (actionType) {
+                case "tap" -> {
+                    String target = suggested.getTarget();
+                    if (target == null || target.isBlank()) {
+                        System.out.println("[ANALYZE] ✗ Tap için target boş.");
+                        return false;
+                    }
+                    int[] coords = appiumDriverManager.resolveTargetCenter(
+                            run.getId(), rawPageSource, suggested.getElementId(), target, stepGoal);
+                    if (coords == null) {
+                        System.out.println("[ANALYZE] ✗ '" + target + "' için koordinat çözülemedi.");
+                        return false;
+                    }
+                    run.getSteps().add(new RunStep(stepIndex, "tap", target,
+                            "[Analiz] " + suggested.getReasoning()));
+                    appiumDriverManager.tap(run.getId(), coords[0], coords[1]);
+                    Thread.sleep(1500);
+                    System.out.println("[ANALYZE] ✓ Analiz tap başarılı: \"" + target
+                            + "\" (x=" + coords[0] + ", y=" + coords[1] + ")");
+                    runStore.save(run);
+                    return true;
+                }
+                case "type" -> {
+                    String target = suggested.getTarget();
+                    String text = suggested.getText();
+                    if (target == null || target.isBlank() || text == null || text.isBlank()) {
+                        System.out.println("[ANALYZE] ✗ Type için target/text boş.");
+                        return false;
+                    }
+                    int[] coords = appiumDriverManager.resolveTargetCenter(
+                            run.getId(), rawPageSource, suggested.getElementId(), target, stepGoal);
+                    if (coords == null) {
+                        System.out.println("[ANALYZE] ✗ '" + target + "' için koordinat çözülemedi.");
+                        return false;
+                    }
+                    run.getSteps().add(new RunStep(stepIndex, "type", target,
+                            "[Analiz] " + suggested.getReasoning()));
+                    appiumDriverManager.typeText(run.getId(), coords[0], coords[1], text);
+                    Thread.sleep(1000);
+                    System.out.println("[ANALYZE] ✓ Analiz type başarılı: \"" + target
+                            + "\" ← \"" + text + "\"");
+                    runStore.save(run);
+                    return true;
+                }
+                case "swipe" -> {
+                    String dir = suggested.getDirection();
+                    if (dir == null || dir.isBlank()) dir = "down";
+                    run.getSteps().add(new RunStep(stepIndex, "swipe", null,
+                            "[Analiz] " + suggested.getReasoning()));
+                    appiumDriverManager.swipe(run.getId(), dir);
+                    Thread.sleep(1000);
+                    System.out.println("[ANALYZE] ✓ Analiz swipe başarılı: " + dir);
+                    runStore.save(run);
+                    return true;
+                }
+                case "wait" -> {
+                    run.getSteps().add(new RunStep(stepIndex, "wait", null,
+                            "[Analiz] " + suggested.getReasoning()));
+                    Thread.sleep(2000);
+                    System.out.println("[ANALYZE] ✓ Analiz wait başarılı");
+                    runStore.save(run);
+                    return true;
+                }
+                default -> {
+                    System.out.println("[ANALYZE] ✗ Bilinmeyen aksiyon tipi: " + actionType);
+                    return false;
+                }
+            }
+        } catch (Exception execEx) {
+            System.out.println("[ANALYZE] ✗ Önerilen aksiyon uygulanamadı: " + execEx.getMessage());
+            return false;
+        }
+    }
+
+    // ============================================================================================
+    // ANA ÇALIŞTIRMA DÖNGÜSÜ
+    // ============================================================================================
     private void executeRun(Run run, Map<String, String> variables, String platform, String appPackage, String appActivity, boolean captureScreenshot, boolean recordVideo, boolean parallel) {
         int consecutiveFails = 0;
         String screenshot = null;
         Integer configuredMaxSteps = appSettingsService.getOrCreate().getMaxSteps();
         int maxSteps = (configuredMaxSteps != null && configuredMaxSteps > 0) ? configuredMaxSteps : 15;
-        
-        // Arka plan ekran güncelleme döngüsü için flag
+
         AtomicBoolean screenRefreshRunning = new AtomicBoolean(false);
-        
+
         try {
-            // ============================================================================================
-            // [DUZELTME 2026-09-10] OTURUM BAŞLATMA -- TEK SEFERLİK
-            //
-            // ÖNCEKİ SORUN: startSession/resetToFreshState bir try-catch içindeydi ve catch'te
-            // invalidateSession + startSession + resetToFreshState TEKRAR çağrılıyordu. Bu:
-            //   1) İlk session'ı quit() etmeden map'ten çıkarıp Appium server'da orphan bırakıyordu,
-            //   2) İkinci session açılınca aynı cihaza bağlı İKİ Appium oturumu oluyordu,
-            //   3) İkisi de app'i açma/kapatma komutu gönderince uygulama "kendi kendine açılıp
-            //      kapanıyor / donuyor" belirtisi veriyordu.
-            //
-            // ŞİMDİ: Tek startSession. Başarısız olursa run hata ile kapatılır. resetToFreshState
-            // başarısız olsa bile session ayakta kaldığı için test akışına devam edilir.
-            // ============================================================================================
             try {
                 appiumDriverManager.startSession(run.getId(), platform, appPackage, appActivity, parallel);
             } catch (Exception sessionEx) {
@@ -816,31 +1155,19 @@ public class RunController {
                 System.out.println("[RUN] resetToFreshState uyarısı (devam ediliyor): " + resetEx.getMessage());
             }
 
-            // Uygulama açıldıktan sonra UI'ın tam yüklenmesi için bekleme
             Thread.sleep(2000);
             if (recordVideo) {
                 appiumDriverManager.startScreenRecording(run.getId());
             }
-            // İlk ekran görüntüsünü hemen al
             if (captureScreenshot) {
                 screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
                 liveScreenshots.put(run.getId(), screenshot);
             }
-            
-            // Arka plan ekran güncelleme döngüsünü başlat (video gibi akıcı görüntü için)
+
+            // Arka plan ekran güncelleme döngüsü
             if (captureScreenshot) {
                 screenRefreshRunning.set(true);
                 Thread refreshThread = new Thread(() -> {
-                    // [DUZELTME 2026-09-11] Video-benzeri akıcılık icin iyilestirme:
-                    //   - Sabit "sleep sonra çek" yerine SABİT PERİYOT (fixed-rate) mantığı:
-                    //     her karenin çekim süresi periyottan düşülüyor, böylece çekim
-                    //     yavaşlasa bile bir sonraki kare planlanan zamana yakın gelir ve
-                    //     gecikme zamanla birikmez.
-                    //   - Periyot 250ms'den 120ms'ye indirildi (~8 fps) -- eski değer video
-                    //     hissi vermek için çok yavaştı.
-                    //   - Retry/backoff'lu takeScreenshotBase64 yerine tek denemelik
-                    //     takeScreenshotQuiet kullanılıyor; bir karede hata olursa 1sn+
-                    //     beklemek yerine hemen bir sonraki kare denenir.
                     final long targetPeriodMs = 120;
                     while (screenRefreshRunning.get() && !run.isStopRequested()) {
                         long frameStart = System.currentTimeMillis();
@@ -858,8 +1185,6 @@ public class RunController {
                                 break;
                             }
                         }
-                        // remaining <= 0 ise (çekim periyottan uzun sürdüyse) hiç
-                        // beklemeden hemen bir sonraki kareye geçilir -- gecikme birikmez.
                     }
                 });
                 refreshThread.setDaemon(true);
@@ -874,21 +1199,14 @@ public class RunController {
             int lastStepIndexSeen = -1;
             int stepScrollAttempts = 0;
             int stepScrollNoChange = 0;
-            // [DUZELTME 2026-09-10] XML degisimine duyarli loop tespiti. Ayni action+target
-            // gelir ama XML degistiyse (ör. "Add to Cart" -> "Remove"), ilerleme VAR demektir;
-            // repeatCount SIFIRLANIR. Boylece "butona bas -> metin degisti -> tekrar bas"
-            // dongusu yanlis pozitif olarak FAIL'e takilmaz.
             String lastPageSourceHash = null;
 
             int[] notFoundStreak = {0};
             int[] autoScrollAttempts = {0};
-            // [DUZELTME 2026-09-10] Model hedef ekranda oldugu halde swipe dondururse bunu
-            // kac kez reddettigimizi sayar. 2. redden sonra backend KENDISI tap eder.
             int[] swipeRefusedCount = {0};
-            // [DUZELTME 2026-09-11] Model hedef ekranda oldugu halde YANLIS bir elemente
-            // tikladiginda bunu kac kez reddettigimizi sayar. 2. redden sonra backend
-            // KENDISI dogru elemente tap eder (swipeRefusedCount ile ayni desen).
             int[] wrongTapRefusedCount = {0};
+            // [YENİ 2026-09-15] Ekran analizi fallback sayacı -- run başına en fazla 5
+            int[] analysisUsageCounter = {0};
             boolean isFirstStep = true;
             String repeatWarning = null;
 
@@ -901,10 +1219,20 @@ public class RunController {
                     return;
                 }
 
+                if (currentExecutionStep >= executionSteps.size()) {
+                    run.getSteps().add(new RunStep(i, "done", null,
+                            "Senaryo adımları tamamlandı, test otomatik bitirildi."));
+                    run.setStatus("passed");
+                    run.setFinishedAt(Instant.now().toString());
+                    runStore.save(run);
+                    screenRefreshRunning.set(false);
+                    System.out.println("[STEP] ✓ Tüm adımlar tamamlandı, test otomatik bitirildi");
+                    return;
+                }
+
                 String stepGoal = executionSteps.get(Math.min(currentExecutionStep, executionSteps.size() - 1));
                 boolean lastExecutionStep = currentExecutionStep >= executionSteps.size() - 1;
 
-                // Ekran görüntüsünü HER adımda EN BAŞTA al (arka plan döngüsü çalışsa da garanti için)
                 if (captureScreenshot) {
                     try {
                         screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
@@ -918,10 +1246,13 @@ public class RunController {
                 String filteredPageSource;
                 try {
                     rawPageSource = appiumDriverManager.getPageSource(run.getId());
-                    // [DUZELTME 2026-09-10] filterPageSource artik goal parametresi aliyor --
-                    // hedefle eslesen elementler listenin BASINA tasiniyor. ASAGIDAKI
-                    // resolveTargetCenter ve findMatchingTarget cagrilari da AYNI goal ile
-                    // yapilmali, aksi halde [N] baska bir elemente denk gelir.
+                    // [YENİ 2026-09-15] Adım başında önceki adımdan kalan ya da aniden çıkan
+                    // sistem izin diyaloğunu temizle.
+                    rawPageSource = handleSystemDialogsIfAny(run.getId(), rawPageSource, "adım başı");
+                    
+                    // [YENİ 2026-09-15] Product Tour / Onboarding Tour overlay kontrolü
+                    handleTourOverlay(run.getId(), rawPageSource);
+                    
                     filteredPageSource = appiumDriverManager.filterPageSource(rawPageSource, stepGoal);
                 } catch (Exception pageEx) {
                     System.out.println("Page source alınamadı, adım atlanıyor: " + pageEx.getMessage());
@@ -933,16 +1264,6 @@ public class RunController {
                 }
                 System.out.println("=== FİLTRELENMİŞ XML (adım " + i + ") ===\n" + filteredPageSource);
 
-                // ============================================================================================
-                // [YENİ] DETERMİNİSTİK ADIM YÜRÜTME
-                //
-                // Kullanıcı senaryoyu madde madde verdiğinde her adımın niyeti (uygulama aç, kaydır,
-                // tıkla, testi bitir) ifadeden anlaşılır. Bu yaygın durumları LLM'e bırakmadan doğrudan
-                // ve güvenilir şekilde yürütüyoruz. Böylece "Uygulamayı aç" adımında modelin rastgele
-                // tıklaması, kaydırma adımında yanlış ürüne/dialoglara basması gibi hatalar tamamen
-                // ortadan kalkar. Yalnızca gerçekten belirsiz (UNKNOWN) veya metin girişi (TYPE) gibi
-                // adımlar aşağıdaki LLM akışına düşer.
-                // ============================================================================================
                 if (currentExecutionStep != lastStepIndexSeen) {
                     lastStepIndexSeen = currentExecutionStep;
                     stepScrollAttempts = 0;
@@ -954,11 +1275,10 @@ public class RunController {
                         + " intent=" + intent + " goal='" + stepGoal + "'");
 
                 if (intent == StepIntent.OPEN_APP) {
-                    // Uygulama oturum başında zaten açıldı; bu adımı doğrudan tamamla.
                     run.getSteps().add(new RunStep(i, "wait", stepGoal,
                             "Uygulama zaten açık, adım tamamlandı."));
                     runStore.save(run);
-                    if (!lastExecutionStep) currentExecutionStep++;
+                    currentExecutionStep++;
                     repeatCount = 0;
                     lastActionSignature = null;
                     Thread.sleep(300);
@@ -975,35 +1295,45 @@ public class RunController {
                     return;
                 }
 
+                // ============================================================================================
+                // SCROLL_UNTIL / SCROLL_ONCE
+                // ============================================================================================
                 if (intent == StepIntent.SCROLL_UNTIL || intent == StepIntent.SCROLL_ONCE) {
-                    String found = appiumDriverManager.findMatchingTarget(rawPageSource, stepGoal);
-                    boolean hasTarget = found != null && targetsExactMatch(stepGoal, found)
-                            && strictVariantMatch(stepGoal, found);
 
-                    if (hasTarget) {
-                        // Hedef görünür -> kaydırma adımı tamamlandı, TIKLAMADAN sonraki adıma geç.
+                    // [DUZELTME 2026-09-15] "Aşağı kaydır." gibi KOMUT adımlarında hedef
+                    // arama yapmak yanlış-pozitif üretiyordu ("Aşağıdaki..." metni "aşağı"
+                    // kelimesini içerdiği için adım boşa tamamlanıyor, swipe hiç yapılmıyordu).
+                    // SCROLL_ONCE artık doğrudan swipe yapıyor.
+                    if (intent == StepIntent.SCROLL_ONCE) {
+                        appiumDriverManager.swipe(run.getId(), "down");
+                        run.getSteps().add(new RunStep(i, "swipe", null, "Ekran aşağı kaydırıldı."));
+                        runStore.save(run);
+                        currentExecutionStep++;
+                        repeatCount = 0;
+                        lastActionSignature = null;
+                        continue;
+                    }
+
+                    TargetProbe probe = probeTargetOnPage(run.getId(), rawPageSource, stepGoal);
+                    String found = probe.found();
+                    boolean hasTarget = probe.hasTarget();
+                    boolean targetInteractable = probe.interactable();
+
+                    if (hasTarget && targetInteractable) {
                         run.getSteps().add(new RunStep(i, "swipe", found,
                                 "Hedef '" + found + "' ekranda görünür oldu, kaydırma adımı tamamlandı."));
                         runStore.save(run);
                         System.out.println("[STEP] ✓ Kaydırma tamamlandı, hedef bulundu: " + found);
-                        if (!lastExecutionStep) currentExecutionStep++;
+                        currentExecutionStep++;
                         repeatCount = 0;
                         lastActionSignature = null;
                         Thread.sleep(300);
                         continue;
                     }
-
-                    if (intent == StepIntent.SCROLL_ONCE) {
-                        appiumDriverManager.swipe(run.getId(), "down");
-                        run.getSteps().add(new RunStep(i, "swipe", null, "Ekran aşağı kaydırıldı."));
-                        runStore.save(run);
-                        if (!lastExecutionStep) currentExecutionStep++;
-                        repeatCount = 0;
-                        lastActionSignature = null;
-                        continue;
+                    if (hasTarget) {
+                        System.out.println("[STEP] ⚠ Hedef metinsel olarak bulundu ama henüz tıklanabilir/görünür viewport'ta değil: " + found);
                     }
 
-                    // SCROLL_UNTIL: hedef görünene kadar deterministik kaydırma
                     if (stepScrollAttempts >= MAX_AUTO_SCROLLS) {
                         run.getSteps().add(new RunStep(i, "failed", null,
                                 "Hedef '" + stepGoal + "' tüm kaydırma denemelerine rağmen bulunamadı."));
@@ -1029,8 +1359,6 @@ public class RunController {
                     boolean changed = afterScroll != null && !afterScroll.equals(rawPageSource);
                     if (!changed) {
                         stepScrollNoChange++;
-                        // İçerik iki kez değişmediyse ve karşı yöne de bakıldıysa, liste sonuna gelinmiş
-                        // demektir; hedef gerçekten yok -> başarısız.
                         if (stepScrollNoChange >= 2 && stepScrollAttempts >= 2) {
                             run.getSteps().add(new RunStep(i, "failed", null,
                                     "Hedef '" + stepGoal + "' bulunamadı ve ekran daha fazla kaydırılamıyor."));
@@ -1045,22 +1373,113 @@ public class RunController {
                     } else {
                         stepScrollNoChange = 0;
                     }
+
+                    TargetProbe afterScrollProbe = rescanAfterScroll(run.getId(), stepGoal, afterScroll);
+                    if (afterScrollProbe.interactable()) {
+                        String nextStepInfo = "";
+                        if (currentExecutionStep + 1 < executionSteps.size()) {
+                            nextStepInfo = " (Sonraki adım: \"" + executionSteps.get(currentExecutionStep + 1) + "\")";
+                        }
+                        run.getSteps().add(new RunStep(i, "swipe", afterScrollProbe.found(),
+                                "Hedef '" + afterScrollProbe.found() + "' kaydırma sonrası detaylı taramada görünür oldu, kaydırma adımı tamamlandı."));
+                        runStore.save(run);
+                        System.out.println("[STEP] ✓ Kaydırma sonrası hedef bulundu: " + afterScrollProbe.found() + nextStepInfo);
+                        currentExecutionStep++;
+                        repeatCount = 0;
+                        lastActionSignature = null;
+                        Thread.sleep(300);
+                        continue;
+                    }
+
+                    if (afterScrollProbe.hasTarget()) {
+                        System.out.println("[STEP] ⚠ Kaydırma sonrası hedef bulundu ama henüz etkileşilebilir değil: " + afterScrollProbe.found());
+                    }
+
                     run.getSteps().add(new RunStep(i, "swipe", null,
                             "Hedef '" + stepGoal + "' aranıyor, ekran " + turkishDirection(scrollDir) + " kaydırıldı."));
                     runStore.save(run);
                     continue;
                 }
 
+                // ============================================================================================
+                // TAP INTENT -- [YENİLENDİ 2026-09-15 v3 - elementId desteği eklendi]
+                //
+                // YENİ STRATEJİ (ÖNCELİK DEĞİŞTİRİLDİ):
+                //   A. findMatchingTarget ile hedefi bul (deterministik string eşleşme)
+                //   B. Devre dışı kontrolü
+                //   C. LLM elementId varsa → O SPESİFİK elemente tıkla (en doğru!)
+                //   D. LLM elementId yoksa → Locator çıkar (XPath, ID, content-desc)
+                //   E. ÖNCE: WebElement.click() ile tıkla (en güvenilir yöntem)
+                //   F. WebElement.click() başarısızsa → koordinat tap dene
+                //   G. Koordinat tap başarısızsa → ekran analizi fallback
+                //   H. En son çare scroll (sadece hedef görünmüyorsa)
+                //
+                // NEDEN ÖNCE WebElement.click()?
+                //   - Koordinat bağımlılığı yok
+                //   - Viewport dışı elementleri bile tıklayabilir
+                //   - W3C actions chain hataları yok
+                //   - Daha güvenilir ve tutarlı
+                //
+                // NEDEN LLM elementId ÖNCELİKLİ?
+                //   - LLM XML'deki [N] numarasını görüyor ve doğru elementi seçiyor
+                //   - Birden fazla aynı label varsa LLM doğru olanı seçiyor
+                //   - Direkt o elemente tıkla = kesin sonuç
+                // ============================================================================================
                 if (intent == StepIntent.TAP) {
+                    boolean deterministicTapFailed = false;
+                    boolean skipScrollFallback = false;
+                    boolean targetVisibleButNotTappable = false;
+
                     String found = appiumDriverManager.findMatchingTarget(rawPageSource, stepGoal);
-                    if (found != null && targetsExactMatch(stepGoal, found) && strictVariantMatch(stepGoal, found)) {
-                        int[] center = appiumDriverManager.resolveTargetCenter(
-                                run.getId(), rawPageSource, null, found, stepGoal);
-                        if (center != null && appiumDriverManager.isValidCoordinate(rawPageSource, center[0], center[1])) {
-                            run.getSteps().add(new RunStep(i, "tap", found, "Hedef '" + found + "' tıklandı."));
-                            System.out.println("[STEP] Deterministik tap: " + found + " (x=" + center[0] + ", y=" + center[1] + ")");
-                            try {
-                                appiumDriverManager.tap(run.getId(), center[0], center[1]);
+                    System.out.println("[TAP-STEP] Adım hedefi: \"" + stepGoal + "\", bulunan: \"" + found + "\"");
+
+                    // ---- DEVRE DIŞI KORUMASI ----
+                    if (found != null
+                            && targetsExactMatch(stepGoal, found)
+                            && strictVariantMatch(stepGoal, found)
+                            && exactProductPhraseMatch(stepGoal, found)
+                            && appiumDriverManager.isTargetDisabled(rawPageSource, found)) {
+                        System.out.println("[STEP] ⚠ Hedef '" + found + "' DEVRE DIŞI (enabled=false) — tap atlanıyor, LLM'e bırakılıyor");
+                        run.getSteps().add(new RunStep(i, "wait", found,
+                                "Hedef '" + found + "' ekranda görünüyor ama DEVRE DIŞI (enabled=false). "
+                                        + "Tap denemesi yapılmadı."));
+                        runStore.save(run);
+                        repeatWarning = (repeatWarning == null || repeatWarning.isBlank() ? "" : repeatWarning + "\n\n")
+                                + "!!! HEDEF DEVRE DIŞI (enabled=false) !!!\n"
+                                + "Ekranda aradığın \"" + found + "\" elementi VAR ama ŞU AN DEVRE DIŞI.\n"
+                                + "Bu butonu aktif hale getirmek için ÖNCE gerekli adımı yap:\n"
+                                + "  - Ekranda switch/checkbox/izin kutusu varsa gerekli olanı AÇ,\n"
+                                + "  - Kullanım koşullarını kabul et,\n"
+                                + "  - Formun zorunlu alanlarını doldur.";
+                        skipScrollFallback = true;
+
+                    } else if (found != null
+                            && targetsExactMatch(stepGoal, found)
+                            && strictVariantMatch(stepGoal, found)
+                            && exactProductPhraseMatch(stepGoal, found)) {
+                        // ---- Hedef bulundu ve aktif: Locator çıkar + EKRANDA OLDUĞUNDAN EMİN OL ----
+                        AppiumDriverManager.ElementLocator locator =
+                                appiumDriverManager.findElementLocatorByLabel(rawPageSource, found, stepGoal);
+                        
+                        if (locator == null) {
+                            System.out.println("[TAP-STEP] ✗ Locator çıkarılamadı, element ekranda doğrulanamadı");
+                            run.getSteps().add(new RunStep(i, "failed", found,
+                                    "Hedef '" + found + "' bulundu ama locator çıkarılamadı. Element ekranda doğrulanamadı."));
+                            runStore.save(run);
+                            deterministicTapFailed = true;
+                            skipScrollFallback = true;
+                        } else {
+                            System.out.println("[TAP-STEP] 📍 Locator çıkarıldı: " + appiumDriverManager.formatLocatorForLog(locator));
+                            System.out.println("[TAP-STEP] ✓ Hedef '" + found + "' ekranda TAM OLARAK tespit edildi");
+                            
+                            // ---- 1. DENEME: ÖNCE WebElement.click() (en güvenilir) ----
+                            System.out.println("[TAP-STEP] 🥇 1. DENEME: WebElement.click() ile tıklanıyor (XPath/ID/content-desc)...");
+                            boolean elementClicked = appiumDriverManager.clickElementByLocator(run.getId(), locator);
+                            
+                            if (elementClicked) {
+                                System.out.println("[TAP-STEP] ✓ WebElement.click() BAŞARILI: '" + found + "'");
+                                run.getSteps().add(new RunStep(i, "tap", found,
+                                        "Hedef '" + found + "' WebElement.click() ile tıklandı (en güvenilir metod)"));
                                 if (captureScreenshot) {
                                     try {
                                         screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
@@ -1068,20 +1487,186 @@ public class RunController {
                                     } catch (Exception ignore) {}
                                 }
                                 Thread.sleep(1500);
+                                String afterTapSource = appiumDriverManager.getPageSource(run.getId());
+                                handleSystemDialogsIfAny(run.getId(), afterTapSource, "element click sonrası");
+
                                 notFoundStreak[0] = 0;
                                 consecutiveFails = 0;
                                 repeatCount = 0;
                                 lastActionSignature = null;
-                                if (!lastExecutionStep) currentExecutionStep++;
+                                currentExecutionStep++;
                                 runStore.save(run);
                                 continue;
-                            } catch (Exception tapEx) {
-                                System.out.println("[STEP] Deterministik tap hatası, LLM'e düşülüyor: " + tapEx.getMessage());
+                            }
+                            
+                            System.out.println("[TAP-STEP] ✗ WebElement.click() başarısız, koordinat tap deneniyor...");
+                            
+                            // ---- 2. DENEME: Koordinat tap ----
+                            int[] center = appiumDriverManager.resolveTargetCenter(
+                                    run.getId(), rawPageSource, null, found, stepGoal);
+
+                            if (center != null) {
+                                boolean coordValid = appiumDriverManager.isValidCoordinate(rawPageSource, center[0], center[1])
+                                        && appiumDriverManager.isCoordinateOnViewport(run.getId(), center[0], center[1]);
+
+                                if (coordValid) {
+                                    System.out.println("[TAP-STEP] 🥈 2. DENEME: Koordinat tap deneniyor: (" + center[0] + "," + center[1] + ")");
+                                    try {
+                                        appiumDriverManager.tap(run.getId(), center[0], center[1]);
+                                        System.out.println("[TAP-STEP] ✓ Koordinat tap BAŞARILI: '" + found + "'");
+                                        
+                                        run.getSteps().add(new RunStep(i, "tap", found,
+                                                "Hedef '" + found + "' koordinat tap ile tıklandı (" + center[0] + "," + center[1] + ")"));
+                                        if (captureScreenshot) {
+                                            try {
+                                                screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
+                                                liveScreenshots.put(run.getId(), screenshot);
+                                            } catch (Exception ignore) {}
+                                        }
+                                        Thread.sleep(1500);
+
+                                        String afterTapSource = appiumDriverManager.getPageSource(run.getId());
+                                        String cleanedSource = handleSystemDialogsIfAny(run.getId(), afterTapSource, "tap sonrası");
+                                        if (!cleanedSource.equals(afterTapSource)) {
+                                            rawPageSource = cleanedSource;
+                                        }
+
+                                        notFoundStreak[0] = 0;
+                                        consecutiveFails = 0;
+                                        repeatCount = 0;
+                                        lastActionSignature = null;
+                                        currentExecutionStep++;
+                                        runStore.save(run);
+                                        continue;
+                                    } catch (Exception tapEx) {
+                                        System.out.println("[TAP-STEP] ✗ Koordinat tap başarısız: " + tapEx.getMessage());
+                                    }
+                                } else {
+                                    System.out.println("[TAP-STEP] ⚠ Koordinat geçersiz: (" + center[0] + "," + center[1] + ")");
+                                }
+                            } else {
+                                System.out.println("[TAP-STEP] ⚠ Koordinat çözülemedi");
+                            }
+                            
+                            // ---- Her iki metod da başarısız ----
+                            System.out.println("[TAP-STEP] ✗ Hem WebElement.click() hem koordinat tap başarısız");
+                            run.getSteps().add(new RunStep(i, "failed", found,
+                                    "Otomatik tap başarısız (WebElement.click() + koordinat tap denendi). " +
+                                    "Hedef '" + found + "' ekranda var ama tıklanamadı."));
+                            runStore.save(run);
+                            deterministicTapFailed = true;
+                            repeatWarning = "Hedef \"" + found + "\" ekranda bulundu ama HİÇBİR tap metodu işe yaramadı. " +
+                                    "WebElement.click() (XPath/ID) ve koordinat tap denendi. " +
+                                    "Belki bir overlay/klavye/popup engelliyor; farklı bir aksiyon dene.";
+                        }
+                    } else {
+                        // ---- Hedef ekranda bulunamadı ----
+                        System.out.println("[TAP-STEP] ✗ Hedef '" + stepGoal + "' bulunamadı, scroll fallback");
+                        
+                        // Detaylı sayfa analizi - ekrandaki tüm tıklanabilir elementleri göster
+                        System.out.println("[TAP-STEP] 🔍 DETAYLI SAYFA ANALİZİ:");
+                        List<String> allElements = appiumDriverManager.parseAllElementLabels(rawPageSource);
+                        System.out.println("[TAP-STEP]   Ekrandaki element sayısı: " + allElements.size());
+                        if (allElements.size() <= 20) {
+                            System.out.println("[TAP-STEP]   Tüm elementler: " + String.join(", ", allElements));
+                        } else {
+                            System.out.println("[TAP-STEP]   İlk 20 element: " + allElements.subList(0, Math.min(20, allElements.size())).toString());
+                        }
+                        
+                        // "tıkla." gibi action keyword'leri için potansiyel hedefleri bul
+                        if (stepGoal.equals("tıkla.") || stepGoal.equals("tıkla") || stepGoal.equals("tap")) {
+                            System.out.println("[TAP-STEP] 🎯 Action keyword tespit edildi, potansiyel hedefler aranıyor...");
+                            String[] potentialTargets = {"DEVAM", "DEVAM (1)", "DEVAM (2)", "DEVAM (3)", "İLERLE", "İLERLE (1)", "KAPAT", "KAPAT (1)", "TAMAM", "TAMAM (1)"};
+                            for (String potential : potentialTargets) {
+                                if (allElements.stream().anyMatch(e -> e.contains(potential.replace(" (1)", "").replace(" (2)", "").replace(" (3)", "")))) {
+                                    System.out.println("[TAP-STEP] ✓ Potansiyel hedef bulundu: " + potential);
+                                    // Potansiyel hedefi bul ve tıkla
+                                    AppiumDriverManager.ElementLocator potentialLocator =
+                                            appiumDriverManager.findElementLocatorByLabel(rawPageSource, potential, stepGoal);
+                                    if (potentialLocator != null) {
+                                        int[] potentialCenter = appiumDriverManager.resolveTargetCenter(
+                                                run.getId(), rawPageSource, null, potential, stepGoal);
+                                        if (potentialCenter != null) {
+                                            System.out.println("[TAP-STEP] ✓ Potansiyel hedef koordinatı: (" + potentialCenter[0] + "," + potentialCenter[1] + ")");
+                                            try {
+                                                appiumDriverManager.tap(run.getId(), potentialCenter[0], potentialCenter[1]);
+                                                run.getSteps().add(new RunStep(i, "tap", potential,
+                                                        "Potansiyel hedef '" + potential + "' tıklandı (action keyword için otomatik buldu)"));
+                                                notFoundStreak[0] = 0;
+                                                consecutiveFails = 0;
+                                                repeatCount = 0;
+                                                lastActionSignature = null;
+                                                currentExecutionStep++;
+                                                runStore.save(run);
+                                                continue;
+                                            } catch (Exception e) {
+                                                System.out.println("[TAP-STEP] ✗ Potansiyel hedef tıklama başarısız: " + e.getMessage());
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
+
+                        if (stepScrollAttempts < MAX_AUTO_SCROLLS) {
+                            String scrollDir = AUTO_SCROLL_DIRECTIONS[stepScrollAttempts % AUTO_SCROLL_DIRECTIONS.length];
+                            System.out.println("[SWIPE] Kaydırma yapılıyor: " + scrollDir + " (adım " + (stepScrollAttempts + 1) + "/" + MAX_AUTO_SCROLLS + ")");
+                            appiumDriverManager.swipe(run.getId(), scrollDir);
+                            stepScrollAttempts++;
+                            String afterScroll;
+                            try {
+                                afterScroll = appiumDriverManager.getPageSource(run.getId());
+                                // Detaylı scroll sonrası analiz
+                                System.out.println("[SWIPE] ✓ Kaydırma tamamlandı, detaylı analiz:");
+                                List<String> afterScrollElements = appiumDriverManager.parseAllElementLabels(afterScroll);
+                                System.out.println("[SWIPE]   Yeni element sayısı: " + afterScrollElements.size());
+                                if (afterScrollElements.size() <= 20) {
+                                    System.out.println("[SWIPE]   Tüm elementler: " + String.join(", ", afterScrollElements));
+                                } else {
+                                    System.out.println("[SWIPE]   İlk 20 element: " + afterScrollElements.subList(0, Math.min(20, afterScrollElements.size())).toString());
+                                }
+                                // Hedef var mı kontrol et
+                                if (afterScrollElements.stream().anyMatch(e -> e.contains(stepGoal.replace(".", "").trim()))) {
+                                    System.out.println("[SWIPE] ✓ HEDEF KAYDIRMA SONRASI BULUNDU: " + stepGoal);
+                                }
+                            } catch (Exception e) {
+                                afterScroll = rawPageSource;
+                                System.out.println("[SWIPE] ✗ Sayfa kaydırma sonrası alınamadı: " + e.getMessage());
+                            }
+                            TargetProbe afterScrollProbe = rescanAfterScroll(run.getId(), stepGoal, afterScroll);
+                            run.getSteps().add(new RunStep(i, "swipe", null,
+                                    "Tap hedefi henüz bulunamadı, ekran " + turkishDirection(scrollDir) + " kaydırıldı."));
+                            System.out.println("[TAP-STEP] ✗ Tap hedefi '" + stepGoal + "' bulunamadı, scroll denendi (deneme: " + stepScrollAttempts + "/" + MAX_AUTO_SCROLLS + ")");
+                            runStore.save(run);
+                            if (afterScrollProbe.hasTarget()) {
+                                System.out.println("[TAP-STEP] ℹ Kaydırma sonrası hedef bulundu: " + afterScrollProbe.found());
+                            }
+                            Thread.sleep(400);
+                            continue;
+                        }
                     }
-                    // Deterministik olarak hedef bulunamadı/çözülemedi -> LLM akışına düş.
-                    System.out.println("[STEP] Deterministik tap çözülemedi, LLM akışına düşülüyor. Hedef: " + stepGoal);
+
+                    // ---- Scroll fallback atlama kararı ----
+                    if (skipScrollFallback || deterministicTapFailed) {
+                        System.out.println("[TAP-STEP] Scroll fallback atlandı (" +
+                                (skipScrollFallback ? "devre-dışı" : "deterministik tap başarısız") +
+                                "), ekran analizi fallback deneniyor.");
+                    }
+
+                    // ---- Ekran analizi fallback ----
+                    System.out.println("[TAP-STEP] 🧠 Ekran analizi fallback devreye alınıyor...");
+                    boolean progressed = tryScreenAnalysisFallback(
+                            run, stepGoal, rawPageSource, i, analysisUsageCounter);
+                    if (progressed) {
+                        notFoundStreak[0] = 0;
+                        consecutiveFails = 0;
+                        repeatCount = 0;
+                        lastActionSignature = null;
+                        Thread.sleep(500);
+                        continue;
+                    }
+
+                    System.out.println("[TAP-STEP] Deterministik tap + analiz çözülemedi, LLM akışına düşülüyor.");
                 }
 
                 if (isFirstStep) {
@@ -1090,8 +1675,9 @@ public class RunController {
                     isFirstStep = false;
                     try {
                         rawPageSource = appiumDriverManager.getPageSource(run.getId());
+                        // [YENİ 2026-09-15] İlk adımda splash/izin diyaloğu çıkabilir
+                        rawPageSource = handleSystemDialogsIfAny(run.getId(), rawPageSource, "ilk adım");
                         filteredPageSource = appiumDriverManager.filterPageSource(rawPageSource, stepGoal);
-                        // Ekran görüntüsünü tekrar al
                         if (captureScreenshot) {
                             screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
                             liveScreenshots.put(run.getId(), screenshot);
@@ -1107,31 +1693,37 @@ public class RunController {
                 }
 
                 // ============================================================================================
-                // [DUZELTME 2026-09-10] PRE-LLM KONTROL
-                //
-                // LLM karar vermeden ONCE hedefin ekranda olup olmadigini kontrol ediyoruz.
-                // Varsa modele "swipe yapma, tap et" seklinde ACİK bir talimat ekliyoruz --
-                // "urun gorunuyor ama kaydirmaya devam ediyor" sorununu kokunden cozer.
-                //
-                // targetOnScreen degiskeni asagida case "swipe" icinde TEKRAR kullanilir, bu
-                // sayede ayni XML icin findMatchingTarget iki kez cagrilmaz.
+                // PRE-LLM KONTROL
                 // ============================================================================================
                 String targetOnScreen = appiumDriverManager.findMatchingTarget(rawPageSource, stepGoal);
                 if (targetOnScreen != null) {
-                    String preHint = "!!! DİKKAT: Hedeflediğin element EKRANDA ZATEN GÖRÜNÜYOR: \""
-                            + targetOnScreen + "\". "
-                            + "Bu adımda SAKIN action=swipe döndürme -- swipe reddedilir. "
-                            + "XML'de bu elementin [N] numarasını bul ve action=tap döndür. "
-                            + "Eğer bu \"Product Image\" gibi genel bir etiketse, etiketin sonundaki "
-                            + "\"[product: ...]\" ekinin hedefle eşleştiğinden emin ol.";
+                    boolean targetDisabled = appiumDriverManager.isTargetDisabled(rawPageSource, targetOnScreen);
+
+                    String preHint;
+                    if (targetDisabled) {
+                        preHint = "!!! ÇOK ÖNEMLİ: Hedeflediğin \"" + targetOnScreen + "\" elementi EKRANDA GÖRÜNÜYOR "
+                                + "AMA DEVRE DIŞI (enabled=false). Bu butona TAP ETMEK hiçbir şey yapmaz — "
+                                + "uygulama touch event'i kabul etmez. "
+                                + "BUTONU TAP ETME! Bunun yerine bu butonu AKTİF hale getirecek ÖNCEKİ adımı yap: "
+                                + "ekranda switch/checkbox/izin kutuları varsa gerekli olanı aç, kullanım koşullarını "
+                                + "kabul et, zorunlu bir alanı doldur; gerekiyorsa aşağı kaydırıp eksik koşulu tamamla. "
+                                + "Butonu tekrar tekrar tap ETME ve scroll ile de kaçırma — buton zaten ekranda.";
+                        System.out.println("[RUN] Pre-LLM hint: hedef '" + targetOnScreen + "' DEVRE DIŞI (enabled=false)");
+                    } else {
+                        preHint = "!!! DİKKAT: Hedeflediğin element EKRANDA ZATEN GÖRÜNÜYOR: \""
+                                + targetOnScreen + "\". "
+                                + "Bu adımda SAKIN action=swipe döndürme -- swipe reddedilir. "
+                                + "XML'de bu elementin [N] numarasını bul ve action=tap döndür. "
+                                + "Eğer bu \"Product Image\" gibi genel bir etiketse, etiketin sonundaki "
+                                + "\"[product: ...]\" ekinin hedefle eşleştiğinden emin ol.";
+                        System.out.println("[RUN] Pre-LLM hint eklendi: hedef ekranda gorunuyor -> " + targetOnScreen);
+                    }
+
                     repeatWarning = (repeatWarning == null || repeatWarning.isBlank())
                             ? preHint
                             : (repeatWarning + "\n\n" + preHint);
-                    System.out.println("[RUN] Pre-LLM hint eklendi: hedef ekranda gorunuyor -> " + targetOnScreen);
-                    
-                    // [YENİ 2026-09-14] TAM EŞLEŞME KONTROLÜ - PRE-LLM
-                    // Hedef ekranda var AMA tam eşleşmiyor mu? (örn: goal "(violet)" ama target "(green)")
-                    if (!targetsExactMatch(stepGoal, targetOnScreen)) {
+
+                    if (!targetDisabled && !targetsExactMatch(stepGoal, targetOnScreen)) {
                         String wrongProductHint = "!!! ÇOK ÖNEMLİ: Ekranda görünen ürün HEDEFLE TAM EŞLEŞMİYOR! "
                                 + "Goal: '" + run.getGoal() + "'\n"
                                 + "Found: '" + targetOnScreen + "'\n"
@@ -1142,8 +1734,8 @@ public class RunController {
                         repeatWarning = (repeatWarning == null || repeatWarning.isBlank())
                                 ? wrongProductHint
                                 : (repeatWarning + "\n\n" + wrongProductHint);
-                        System.out.println("[RUN] ⚠ YANLIŞ ÜRÜN UYARISI: goal='" + run.getGoal() + 
-                                         "', found='" + targetOnScreen + "'");
+                        System.out.println("[RUN] ⚠ YANLIŞ ÜRÜN UYARISI: goal='" + run.getGoal() +
+                                "', found='" + targetOnScreen + "'");
                     }
                 }
 
@@ -1159,39 +1751,51 @@ public class RunController {
                 repeatWarning = null;
 
                 // ============================================================================================
-                // [YENİ 2026-09-14] HARD BLOCK - YANLIŞ ÜRÜN TIKLAMASINI ÖNLE
+                // HARD BLOCK: DEVRE DIŞI + YANLIŞ ÜRÜN
                 // ============================================================================================
-                // LLM yanlış ürünü seçerse (örn: goal "(violet)" ama target "(green)"),
-                // bu tap işlemi ASLA uygulanmaz! Sistem hemen engeller.
                 if ("tap".equals(action.getAction()) && action.getTarget() != null) {
+                    if (appiumDriverManager.isTargetDisabled(rawPageSource, action.getTarget())) {
+                        System.out.println("[RUN] 🚫 HARD BLOCK: '" + action.getTarget()
+                                + "' DEVRE DIŞI (enabled=false), tap reddedildi.");
+                        run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
+                                "SİSTEM ENGELLEDİ: \"" + action.getTarget() + "\" elementi DEVRE DIŞI (enabled=false). "
+                                        + "Bu butona tap etmek hiçbir şey yapmaz. Bunun yerine bu butonu aktif hale getirecek "
+                                        + "ön adımı yap: ekrandaki switch/checkbox/izin kutusunu aç, koşulları kabul et, "
+                                        + "zorunlu alanı doldur ya da gerekirse aşağı kaydırıp eksik koşulu tamamla. "
+                                        + "Aynı butonu tekrar tap ETME!"));
+                        runStore.save(run);
+                        repeatCount = 0;
+                        repeatWarning = "!!! HEDEF DEVRE DIŞI (enabled=false) !!!\n"
+                                + "Tap etmeye çalıştığın \"" + action.getTarget() + "\" elementi ekranda VAR ama "
+                                + "ŞU AN DEVRE DIŞI. Bu butonu aktif hale getirecek ÖN ADIMI yap "
+                                + "(switch/checkbox aç, koşulları kabul et, zorunlu alanı doldur, gerekirse kaydır). "
+                                + "Bu butona tekrar tap ETME!";
+                        Thread.sleep(400);
+                        continue;
+                    }
+
                     if (!targetsExactMatch(stepGoal, action.getTarget())
                             || !strictVariantMatch(stepGoal, action.getTarget())) {
                         System.out.println("[RUN] 🚫 HARD BLOCK: Yanlış ürün tıklaması ENGELLENDİ!");
                         System.out.println("[RUN] 🚫 Goal: '" + run.getGoal() + "'");
                         System.out.println("[RUN] 🚫 Model'in seçtiği: '" + action.getTarget() + "'");
-                        
+
                         run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
                                 "SİSTEM ENGELLEDİ: Seçtiğin ürün hedefle TAM EŞLEŞMİYOR! " +
-                                "Goal: '" + run.getGoal() + "'\n" +
-                                "Seçtiğin: '" + action.getTarget() + "'\n" +
-                                "Farklı bir renk/variyant seçtin. XML'de TAM OLARAK '" + 
-                                run.getGoal() + "' içeren element bul veya yoksa action=swipe yap. " +
-                                "ASLA yanlış ürüne tıklama!"));
+                                        "Goal: '" + run.getGoal() + "'\n" +
+                                        "Seçtiğin: '" + action.getTarget() + "'\n" +
+                                        "Farklı bir renk/variyant seçtin. XML'de TAM OLARAK '" +
+                                        run.getGoal() + "' içeren element bul veya yoksa action=swipe yap. " +
+                                        "ASLA yanlış ürüne tıklama!"));
                         runStore.save(run);
-                        
+
                         repeatCount = 0;
                         Thread.sleep(400);
                         continue;
                     }
                 }
 
-                // ============================================================================================
-                // [DUZELTME 2026-09-10] elementId validasyonu
-                //
-                // Qwen gibi weak modellerin en sik hatasi: XML'de 30 element varken "[200]" gibi
-                // uydurma ID dondurmek. Bu durumda action'i HIC UYGULAMIYORUZ; modele acik uyari
-                // verip ayni adimi tekrar denetiyoruz.
-                // ============================================================================================
+                // elementId validasyonu
                 if (("tap".equals(action.getAction()) || "type".equals(action.getAction()))) {
                     Integer parsedId = parseElementId(action.getElementId());
                     int maxId = appiumDriverManager.countEmittableElements(rawPageSource, stepGoal);
@@ -1211,30 +1815,7 @@ public class RunController {
                     }
                 }
 
-                // ============================================================================================
-                // [DUZELTME 2026-09-11] GENEL "YANLIS URUN/ELEMAN SECIMI" KORUMASI
-                //
-                // findMatchingTarget (yukarida targetOnScreen) deterministik string eslestirmeyle
-                // (renk/varyant/marka gibi AYIRT EDICI kelimelerle) hedefi ekranda ONCEDEN bulmus
-                // olabilir. Ama zayif modeller bu ipucunu gormezden gelip GORSEL OLARAK benzer,
-                // FARKLI bir elemente (ornegin baska renkteki urune) tiklayabiliyordu -- kullanicinin
-                // bildirdigi "yellow istiyorum ama rastgele bir urun seciliyor" hatasi tam olarak bu.
-                //
-                // [DUZELTME 2026-09-14] ONCEDEN sadece model "[product: X]" seklinde zenginlestirilmis
-                // bir gorsele tikladiginda devreye giriyordu -- ETIKETLI (duz metin) hedeflerde
-                // (ör. dogrudan text="Yellow T-Shirt" olan bir eleman) HICBIR KORUMA yoktu. Artik
-                // swipe-red mekanizmasiyla SIMETRIK: targetOnScreen dolu oldugu ve modelin sectigi
-                // eleman FARKLI oldugu her durumda calisir -- [product: ...] etiketine bagli degildir,
-                // herhangi bir uygulamada (SauceLabs'e ozel degil) genel olarak calisir.
-                // ============================================================================================
-                // [DUZELTME 2026-09-14] ÇOK ADIMLI GOAL: targetOnScreen goal-genelidir
-                // (ör. çok adımlı senaryoda hep ilk varyant "yellow" döner). Model, ürün
-                // detayından geri dönmek için navigasyon butonuna ("View menu", geri) ya da
-                // sonraki adımın DOĞRU ürününe (ör. "orange") bastığında chosenLabel,
-                // targetOnScreen'den FARKLIDIR ama YANLIŞ ürün DEĞİLDİR. Bu yüzden guard'ı
-                // yalnızca chosenLabel GERÇEKTEN yanlış bir varyant taşıyorsa (targetsExactMatch
-                // false) tetikliyoruz -- aksi halde geri navigasyonu ve sonraki adımları
-                // engelleyip test'i yellow detayında kilitliyordu.
+                // Yanlış element seçimi koruması
                 if ("tap".equals(action.getAction()) && targetOnScreen != null) {
                     String chosenLabel = appiumDriverManager.labelForElementId(rawPageSource, action.getElementId(), stepGoal);
                     if (chosenLabel != null && !chosenLabel.equals(targetOnScreen)
@@ -1288,16 +1869,7 @@ public class RunController {
                     continue;
                 }
 
-                // ============================================================================================
-                // [DUZELTME 2026-09-10] REPEAT DETECTION -- XML hash'e duyarli
-                //
-                // ONCEKI SORUN: Ayni action+target ust uste gelince loop sayiliyordu, ama XML
-                // degisse bile (ör. "Add to Cart" -> "Remove") ayni signature doniyordu. Bu yuzden
-                // model basarili bir ekleme yaptiktan sonra bile 3. tekrarda FAIL tetikleniyordu.
-                //
-                // SIMDI: XML hash'i karsilastirilir. Degistiyse repeatCount SIFIRLANIR -- cunku
-                // ekran durumu degismis, ilerleme VAR demektir.
-                // ============================================================================================
+                // REPEAT DETECTION (XML hash'e duyarlı)
                 String currentPageSourceHash = String.valueOf(rawPageSource.hashCode());
                 boolean xmlChanged = lastPageSourceHash != null
                         && !lastPageSourceHash.equals(currentPageSourceHash);
@@ -1308,14 +1880,11 @@ public class RunController {
                     notFoundStreak[0] = 0;
                 } else {
                     String currentSignature = action.getAction() + "|" + action.getTarget();
-                    
-                    // [DUZELTME 2026-09-14] MULTI-STEP SENARYOLARDA AKILLI DÖNGÜ TESPİTİ
-                    // Eğer XML değiştiyse -> bu bir döngü DEĞİLDİR, ilerleme var!
-                    // Sadece XML değişmediyse ve aynı elemente tekrar tıklanıyorsa -> döngü
+
                     if (currentSignature.equals(lastActionSignature) && !xmlChanged) {
                         repeatCount++;
-                        System.out.println("[RUN] ⚠️ AYNI AKSİYON TEKRARI: repeatCount=" + repeatCount + 
-                                         ", target=" + action.getTarget() + ", xmlChanged=false");
+                        System.out.println("[RUN] ⚠️ AYNI AKSİYON TEKRARI: repeatCount=" + repeatCount +
+                                ", target=" + action.getTarget() + ", xmlChanged=false");
                     } else {
                         if (xmlChanged && currentSignature.equals(lastActionSignature)) {
                             System.out.println("[RUN] ✓ XML değişti, repeatCount sifirlaniyor (ilerleme var) - target: " + action.getTarget());
@@ -1352,7 +1921,6 @@ public class RunController {
                 if (("tap".equals(action.getAction()) || "type".equals(action.getAction()))
                         && action.getTarget() != null && !action.getTarget().isBlank()) {
                     System.out.println("[TARGET] Hedef çözülüyor: elementId=" + action.getElementId() + ", target=" + action.getTarget());
-                    // [DUZELTME 2026-09-10] goal parametresi de geciriliyor.
                     int[] corrected = appiumDriverManager.resolveTargetCenter(run.getId(), rawPageSource, action.getElementId(), action.getTarget(), stepGoal);
                     if (corrected != null) {
                         action.setX(corrected[0]);
@@ -1390,13 +1958,9 @@ public class RunController {
                             runStore.save(run);
                             repeatCount = 0;
                             lastActionSignature = null;
-                            
-                            // [YENI 2026-09-14] Scroll sonrası YENİ page source ile tekrar ara!
-                            rawPageSource = outcome.newPageSource(); // YENİ XML'i kullan
+                            rawPageSource = outcome.newPageSource();
                             System.out.println("[AUTO-SCROLL] YENİ PAGE SOURCE ile arama tekrarlanıyor...");
-                            System.out.println("[AUTO-SCROLL] Yeni XML uzunluğu: " + (rawPageSource != null ? rawPageSource.length() : 0) + " karakter");
-                            
-                            // Hedefi yeni ekranda tekrar ara
+
                             String matchingTarget = appiumDriverManager.findMatchingTarget(rawPageSource, stepGoal);
                             if (matchingTarget != null) {
                                 System.out.println("[AUTO-SCROLL] ✓ YENİ EKRANDA HEDEF BULUNDU: " + matchingTarget);
@@ -1404,34 +1968,18 @@ public class RunController {
                                         + turkishDirection(outcome.direction()) + " kaydırdı. YENİ EKRANDA HEDEF BULUNDU: " + matchingTarget
                                         + " Şimdi bu YENİ elementi hedefle!";
                             } else {
-                                System.out.println("[AUTO-SCROLL] ✗ YENİ EKRANDA HEDEF BULUNAMADI, devam ediliyor...");
                                 repeatWarning = "Az önce hedeflediğin \"" + action.getTarget() + "\" elementi ekranda görünmediği için "
                                         + "SİSTEM ekranı otomatik olarak " + turkishDirection(outcome.direction()) + " kaydırdı. Şimdi "
-                                        + "ekrandaki YENİ XML listesine bak: hedef artık görünür olabilir (aynı elementi tekrar "
-                                        + "seçebilirsin) ya da farklı bir element gerekebilir.";
+                                        + "ekrandaki YENİ XML listesine bak.";
                             }
                         } else if (outcome.scrolled()) {
-                            // [DUZELTME 2026-09-11] Swipe cagrildi ama ekran ICERIGI DEGISMEDI --
-                            // bu ekran kaydirilamiyor olabilir (sabit form) ya da hedef bir
-                            // klavye/overlay tarafindan kapatilmis olabilir. Ayni yalan-pozitif
-                            // "kaydirdim, tekrar bak" mesajini tekrar tekrar vermek yerine modele
-                            // durumu ACIKCA soyluyoruz ki ayni kordugumu tekrar denemeyi biraksin.
                             run.getSteps().add(new RunStep(i, "swipe", null,
                                     "Kaydırma denendi ama ekran İÇERİĞİ DEĞİŞMEDİ (bu ekran kaydırılamıyor olabilir)."));
                             runStore.save(run);
                             repeatWarning = "\"" + action.getTarget() + "\" için kaydırma denendi ama ekran hiç değişmedi -- bu ekran "
-                                    + "muhtemelen kaydırılamıyor (sabit bir form) ya da hedef fiziksel olarak ekran dışında/bir "
-                                    + "overlay (klavye, popup) tarafından kapatılmış durumda. AYNI YÖNDE KAYDIRMAYI TEKRARLAMA. "
-                                    + "Bunun yerine: (a) ekranda ŞU AN GÖRÜNEN farklı bir elementle devam etmeyi dene, (b) bir "
-                                    + "klavye/popup açık olabilir, onu kapatmayı dene, (c) gerçekten farklı bir yöne kaydırmayı dene.";
+                                    + "muhtemelen kaydırılamıyor. AYNI YÖNDE KAYDIRMAYI TEKRARLAMA.";
                         } else {
-                            repeatWarning = "Hedeflediğin \"" + action.getTarget() + "\" elementi mevcut ekranda GÖRÜNMÜYOR "
-                                    + "(XML'de var ama fiziksel ekranın dışında/altında kalıyor). Bu elemente TEKRAR dokunmayı ya da "
-                                    + "yazmayı deneme -- hiçbir şeye isabet etmez. Önce şunu sorgula: bu ara adıma GERÇEKTEN ihtiyacın "
-                                    + "var mı, yoksa hedef zaten şu an ekranda GÖRÜNEN başka bir elementle tamamlanabilir mi? Eğer "
-                                    + "gerçekten bu elemente ulaşman gerekiyorsa, onu görünür kılacak DOĞRU aksiyonu bul (bu bir "
-                                    + "kaydırma olabilir, ama tek seçenek bu değil -- bir menü/gezinme ikonuna dokunmak ya da başka "
-                                    + "bir aksiyon da olabilir). Aynı görünmeyen elementi ısrarla hedeflemeye devam etme.";
+                            repeatWarning = "Hedeflediğin \"" + action.getTarget() + "\" elementi mevcut ekranda GÖRÜNMÜYOR.";
                         }
                         Thread.sleep(400);
                         continue;
@@ -1445,10 +1993,6 @@ public class RunController {
                                     "GEÇERSİZ KOORDİNAT (XML'de karşılığı yok), tıklama yapılamadı: " + action.getReasoning()));
                             runStore.save(run);
                             consecutiveFails++;
-
-                            if (consecutiveFails >= 2) {
-                                System.out.println("[RUN] UYARI: " + consecutiveFails + " kez başarısız deneme. Farklı bir element veya action seçilmeli!");
-                            }
 
                             AutoScrollOutcome outcome = autoScrollIfNeeded(run.getId(), rawPageSource, notFoundStreak, autoScrollAttempts);
                             if (outcome.exhausted()) {
@@ -1469,16 +2013,12 @@ public class RunController {
                                 lastActionSignature = null;
                                 repeatWarning = "Az önce hedeflediğin \"" + action.getTarget() + "\" elementi üst üste bulunamadığı "
                                         + "için SİSTEM ekranı otomatik olarak " + turkishDirection(outcome.direction()) + " kaydırdı. "
-                                        + "Şimdi ekrandaki YENİ XML listesine bakarak DEVAM ET. Aynı hedefi tekrar dene!";
+                                        + "Şimdi ekrandaki YENİ XML listesine bakarak DEVAM ET.";
                             } else if (outcome.scrolled()) {
                                 run.getSteps().add(new RunStep(i, "swipe", null,
                                         "Kaydırma denendi ama ekran İÇERİĞİ DEĞİŞMEDİ (bu ekran kaydırılamıyor olabilir)."));
                                 runStore.save(run);
-                                repeatWarning = "\"" + action.getTarget() + "\" için kaydırma denendi ama ekran hiç değişmedi -- bu ekran "
-                                        + "muhtemelen kaydırılamıyor (sabit bir form) ya da hedef fiziksel olarak ekran dışında/bir "
-                                        + "overlay (klavye, popup) tarafından kapatılmış durumda. AYNI YÖNDE KAYDIRMAYI TEKRARLAMA. "
-                                        + "Bunun yerine: (a) ekranda ŞU AN GÖRÜNEN farklı bir elementle devam etmeyi dene, (b) bir "
-                                        + "klavye/popup açık olabilir, onu kapatmayı dene, (c) gerçekten farklı bir yöne kaydırmayı dene.";
+                                repeatWarning = "\"" + action.getTarget() + "\" için kaydırma denendi ama ekran hiç değişmedi.";
                             }
                             Thread.sleep(800);
                             continue;
@@ -1488,16 +2028,14 @@ public class RunController {
                         System.out.println("[RUN] Tap işlemi yapılıyor: " + action.getTarget() + " (x=" + action.getX() + ", y=" + action.getY() + ")");
 
                         try {
-                            // Tap işlemi ÖNCESİ page source'u kaydet
                             String pageSourceBeforeTap = rawPageSource;
-                            
+
                             appiumDriverManager.tap(run.getId(), action.getX(), action.getY());
                             notFoundStreak[0] = 0;
                             consecutiveFails = 0;
                             swipeRefusedCount[0] = 0;
                             wrongTapRefusedCount[0] = 0;
 
-                            // Tap sonrası ekran görüntüsünü anında güncelle (arka plan döngüsü de çalışıyor)
                             if (captureScreenshot) {
                                 try {
                                     screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
@@ -1508,21 +2046,30 @@ public class RunController {
                                 }
                             }
 
-                            System.out.println("[RUN] Tap sonrası bekleme (uygulama arka plana düşmesin diye 1.5s)...");
-                            // Arka plan döngüsü bu sırada da çalışıyor, görüntü akıcı kalıyor
                             Thread.sleep(1500);
+
+                            // [YENİ 2026-09-15] Tap sonrası sistem izin diyaloğu kontrolü
+                            String afterTapSource = appiumDriverManager.getPageSource(run.getId());
+                            String cleanedSource = handleSystemDialogsIfAny(run.getId(), afterTapSource, "tap sonrası");
+                            if (!cleanedSource.equals(afterTapSource)) {
+                                rawPageSource = cleanedSource;
+                                if (captureScreenshot) {
+                                    try {
+                                        screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
+                                        liveScreenshots.put(run.getId(), screenshot);
+                                    } catch (Exception ignore) {}
+                                }
+                            }
+
                             System.out.println("[RUN] Tap işlemi BAŞARILI: " + action.getTarget());
                             if (!lastExecutionStep) {
                                 currentExecutionStep++;
                             }
-                            
-                            // [YENI 2026-09-14] HEDEF TAMAMLAMA KONTROLÜ
-                            // Tap sonrası yeni page source al
+
                             String pageSourceAfterTap = appiumDriverManager.getPageSource(run.getId());
                             if (lastExecutionStep && isGoalCompleted(run.getId(), run.getGoal(), action.getTarget(),
-                                              pageSourceBeforeTap, pageSourceAfterTap)) {
+                                    pageSourceBeforeTap, pageSourceAfterTap)) {
                                 System.out.println("[RUN] ✓ HEDEF TAMAMLANDI: '" + action.getTarget() + "' tıklandı, ekran değişti ve hedef yeni ekranda yok.");
-                                System.out.println("[RUN] Test başarıyla tamamlandı - action=done önerisi");
                                 run.getSteps().add(new RunStep(i, "done", action.getTarget(),
                                         "Hedef element başarıyla tıklandı, ekran değişti ve test tamamlandı: " + run.getGoal()));
                                 run.setStatus("completed");
@@ -1541,7 +2088,6 @@ public class RunController {
                             Thread.sleep(800);
                             continue;
                         }
-
                     }
                     case "type" -> {
                         if (!appiumDriverManager.isValidCoordinate(rawPageSource, action.getX(), action.getY())) {
@@ -1567,34 +2113,18 @@ public class RunController {
                                 runStore.save(run);
                                 repeatCount = 0;
                                 lastActionSignature = null;
-                                
-                                // [YENI 2026-09-14] Scroll sonrası YENİ page source ile tekrar ara!
-                                rawPageSource = outcome.newPageSource(); // YENİ XML'i kullan
-                                System.out.println("[AUTO-SCROLL] YENİ PAGE SOURCE ile arama tekrarlanıyor...");
-                                System.out.println("[AUTO-SCROLL] Yeni XML uzunluğu: " + (rawPageSource != null ? rawPageSource.length() : 0) + " karakter");
-                                
-                                // Hedefi yeni ekranda tekrar ara
+                                rawPageSource = outcome.newPageSource();
                                 String matchingTarget = appiumDriverManager.findMatchingTarget(rawPageSource, stepGoal);
                                 if (matchingTarget != null) {
-                                    System.out.println("[AUTO-SCROLL] ✓ YENİ EKRANDA HEDEF BULUNDU: " + matchingTarget);
-                                    repeatWarning = "Az önce hedeflediğin \"" + action.getTarget() + "\" elementi üst üste bulunamadığı "
-                                            + "için SİSTEM ekranı otomatik olarak " + turkishDirection(outcome.direction()) + " kaydırdı. "
-                                            + "YENİ EKRANDA HEDEF BULUNDU: " + matchingTarget + " Şimdi bu YENİ elementi hedefle!";
+                                    repeatWarning = "YENİ EKRANDA HEDEF BULUNDU: " + matchingTarget + " Şimdi bu elementi hedefle!";
                                 } else {
-                                    System.out.println("[AUTO-SCROLL] ✗ YENİ EKRANDA HEDEF BULUNAMADI, devam ediliyor...");
-                                    repeatWarning = "Az önce hedeflediğin \"" + action.getTarget() + "\" elementi üst üste bulunamadığı "
-                                            + "için SİSTEM ekranı otomatik olarak " + turkishDirection(outcome.direction()) + " kaydırdı. "
-                                            + "Şimdi ekrandaki YENİ XML listesine bakarak DEVAM ET. Aynı hedefi tekrar dene!";
+                                    repeatWarning = "Az önceki element üst üste bulunamadığı için SİSTEM otomatik kaydırdı. Yeni XML'e bak.";
                                 }
                             } else if (outcome.scrolled()) {
                                 run.getSteps().add(new RunStep(i, "swipe", null,
                                         "Kaydırma denendi ama ekran İÇERİĞİ DEĞİŞMEDİ (bu ekran kaydırılamıyor olabilir)."));
                                 runStore.save(run);
-                                repeatWarning = "\"" + action.getTarget() + "\" için kaydırma denendi ama ekran hiç değişmedi -- bu ekran "
-                                        + "muhtemelen kaydırılamıyor (sabit bir form) ya da hedef fiziksel olarak ekran dışında/bir "
-                                        + "overlay (klavye, popup) tarafından kapatılmış durumda. AYNI YÖNDE KAYDIRMAYI TEKRARLAMA. "
-                                        + "Bunun yerine: (a) ekranda ŞU AN GÖRÜNEN farklı bir elementle devam etmeyi dene, (b) bir "
-                                        + "klavye/popup açık olabilir, onu kapatmayı dene, (c) gerçekten farklı bir yöne kaydırmayı dene.";
+                                repeatWarning = "Kaydırma denendi ama ekran değişmedi.";
                             }
                             Thread.sleep(800);
                             continue;
@@ -1607,7 +2137,6 @@ public class RunController {
                             if (!lastExecutionStep) {
                                 currentExecutionStep++;
                             }
-                            // Type sonrası ekran güncellemesi (arka plan döngüsü de çalışıyor)
                         } catch (Exception typeEx) {
                             run.getSteps().add(new RunStep(i, "failed", action.getTarget(),
                                     "Yazma başarısız (odak oturmadı): " + typeEx.getMessage()));
@@ -1618,40 +2147,28 @@ public class RunController {
                         }
                     }
                     case "swipe" -> {
-                        // ============================================================================================
-                        // [DUZELTME 2026-09-14] SWIPE SON KONTROL - TAM ÜRÜN ADI KONTROLÜ
-                        //
-                        // Pre-LLM hint'e ragmen model inatla swipe dondururse, burada swipe'i REDDEDIYORUZ.
-                        // AMA SADECE hedef TAM ÜRÜN ADI ile eşleşiyorsa! Kısmi eşleşme varsa (örn. "Sauce Labs Backpack"
-                        // ama goal "Sauce Labs Backpack (yellow)"), swipe'i REDDETME, scroll'a DEVAM ET.
-                        //
-                        // targetOnScreen degiskeni yukarida pre-LLM hint icin hesaplandi -- ayni XML icin
-                        // findMatchingTarget'i TEKRAR cagirmiyoruz (cache).
-                        // ============================================================================================
                         String matchingTarget = targetOnScreen;
-                        
-                        // [YENI 2026-09-14] TAM ÜRÜN ADI kontrolü yap
+
                         boolean isExactMatch = false;
                         if (matchingTarget != null) {
-                            // Goal'dan tam ürün adını çıkar
                             String exactProductName = appiumDriverManager.extractExactProductName(stepGoal);
                             if (exactProductName != null) {
-                                // Tam ürün adı varsa, matchingTarget ile TAMAMEN aynı mı kontrol et
                                 isExactMatch = matchingTarget.toLowerCase(Locale.ROOT).contains(exactProductName.toLowerCase(Locale.ROOT));
                                 System.out.println("[SWIPE REFUSE] Tam ürün adı: " + exactProductName);
                                 System.out.println("[SWIPE REFUSE] Ekrandaki hedef: " + matchingTarget);
                                 System.out.println("[SWIPE REFUSE] TAM EŞLEŞME: " + isExactMatch);
                             } else {
-                                // Tam ürün adı yoksa (genel arama), normal eşleşme kabul et
                                 isExactMatch = true;
                             }
                         }
-                        
-                        // SADECE TAM EŞLEŞME varsa swipe'ı reddet
-                        if (matchingTarget != null && isExactMatch) {
+
+                        // Devre dışı element için swipe reddi YAPMA
+                        boolean targetDisabled = matchingTarget != null
+                                && appiumDriverManager.isTargetDisabled(rawPageSource, matchingTarget);
+
+                        if (matchingTarget != null && isExactMatch && !targetDisabled) {
                             swipeRefusedCount[0]++;
 
-                            // 2. red: otomatik tap yedegi
                             if (swipeRefusedCount[0] >= 2) {
                                 System.out.println("[RUN] Otomatik TAP: model israrla kaydiriyor, hedef zaten ekranda: " + matchingTarget);
                                 int[] center = appiumDriverManager.resolveTargetCenter(
@@ -1683,7 +2200,6 @@ public class RunController {
                                 return;
                             }
 
-                            // 1. red: modele cok net bir uyari ver ve devam et
                             System.out.println("[RUN] Swipe REDDEDILDI -- hedef zaten ekranda: " + matchingTarget);
                             run.getSteps().add(new RunStep(i, "failed", matchingTarget,
                                     "Kaydirma reddedildi: hedef \"" + matchingTarget + "\" ekranda zaten gorunuyor, once secilmeli."));
@@ -1692,27 +2208,25 @@ public class RunController {
                             lastActionSignature = null;
                             repeatWarning = "!!! DUR, KAYDIRMA REDDEDILDI !!! "
                                     + "Hedefledigin element EKRANDA ZATEN GORUNUYOR: \"" + matchingTarget + "\". "
-                                    + "Sakin kaydirma yapma! Bu elementi SIMDI action=tap ile sec "
-                                    + "(uygun [N] numarasini XML'den bul). "
-                                    + "Eger hedef \"Product Image\" gibi genel bir etikete sahipse, etiketin sonundaki "
-                                    + "\"[product: ...]\" ekinin hedefinle ESLESTIGINDEN emin ol.";
+                                    + "Sakin kaydirma yapma! Bu elementi SIMDI action=tap ile sec.";
                             Thread.sleep(500);
                             continue;
                         }
-                        
-                        // [YENI 2026-09-14] TAM EŞLEŞME YOKSA → Scroll'a DEVAM ET
-                        if (matchingTarget != null) {
-                            System.out.println("[SWIPE REFUSE] Kısmi eşleşme var ama TAM ÜRÜN ADI değil, scroll'a devam et: " + matchingTarget);
-                        }
-                        // Normal swipe işlemine devam et (aşağıdaki kod bloğuna düş)
 
-                        // Hedef ekranda yok -- swipe guvenli
+                        if (matchingTarget != null && targetDisabled) {
+                            System.out.println("[SWIPE] Hedef '" + matchingTarget + "' DEVRE DIŞI, swipe serbest bırakılıyor (aktif hale getirmek için scroll gerekebilir).");
+                        }
+
                         swipeRefusedCount[0] = 0;
                         appiumDriverManager.swipe(run.getId(), action.getDirection());
-                        
-                            // Kaydırma sonrası ekran güncellemesi (arka plan döngüsü de çalışıyor)
-                            Thread.sleep(1000); // Kaydırma sonrası bekleme
-                        }
+                        Thread.sleep(1000);
+
+                        // [YENİ 2026-09-15] Swipe sonrası sistem diyaloğu kontrolü
+                        try {
+                            String postSwipeSource = appiumDriverManager.getPageSource(run.getId());
+                            handleSystemDialogsIfAny(run.getId(), postSwipeSource, "swipe sonrası");
+                        } catch (Exception ignore) {}
+                    }
                     case "wait" -> {
                         Thread.sleep(1500);
                         if (isApplicationOpenStep(stepGoal) && !lastExecutionStep) {
@@ -1720,44 +2234,77 @@ public class RunController {
                         }
                     }
                     case "done" -> {
+                        // [KRİTİK DÜZELTME 2026-09-15] LLM'in "done" kararını kontrol et
+                        // Eğer henüz son adım değilse, "done" REDDEDİLMELİ!
+                        if (!lastExecutionStep) {
+                            System.out.println("[RUN] 🚫 LLM 'done' döndürdü AMA henüz son adım DEĞİL!");
+                            System.out.println("[RUN]   Mevcut adım: " + (currentExecutionStep + 1) + "/" + executionSteps.size());
+                            System.out.println("[RUN]   Kalan adım: \"" + executionSteps.get(currentExecutionStep + 1) + "\"");
+                            System.out.println("[RUN]   'done' REDDEDİLDİ, devam ediliyor...");
+                            
+                            run.getSteps().add(new RunStep(i, "failed", null,
+                                    "LLM testi erken bitirmeye çalıştı ama henüz tüm adımlar tamamlanmadı! " +
+                                    "Kalan adım: \"" + executionSteps.get(currentExecutionStep + 1) + "\". " +
+                                    "Devam et!"));
+                            runStore.save(run);
+                            
+                            repeatWarning = "!!! ÇOK ÖNEMLİ: TEST HENÜZ BİTMEDİ !!!\n" +
+                                    "Senaryo'da \"" + executionSteps.get(currentExecutionStep + 1) + "\" adımı KALDI.\n" +
+                                    "action='done' DON'T return! Önce kalan adımı tamamla.\n" +
+                                    "Goal'da 'sonra', 've sonra', 'ardından' varsa VEYA başka yapman gereken şeyler varsa\n" +
+                                    "test henüz BİTMEDİ. Sadece TÜM goal tamamlandığında 'done' döndür!";
+                            Thread.sleep(400);
+                            continue; // "done" reddedildi, devam et
+                        }
+                        
+                        // Son adım ise ve LLM "done" döndürdüyse, test gerçekten bitti
+                        System.out.println("[RUN] ✓ Son adım ve LLM 'done' döndürdü → test bitiriliyor");
                         run.getSteps().add(new RunStep(i, "done", null, action.getReasoning()));
                         run.setStatus("passed");
                         run.setFinishedAt(Instant.now().toString());
                         runStore.save(run);
+                        screenRefreshRunning.set(false);
                         return;
                     }
                     case "fail" -> {
-                        // [YENI 2026-09-14] ÖNCE: autoTapTarget var mı kontrol et (fail sonrası scroll ile bulunan hedef)
+                        // [YENİ 2026-09-15] Vazgeçmeden ÖNCE analizörü dene
+                        System.out.println("[RUN] LLM 'fail' kararı verdi: " + action.getReasoning());
+                        System.out.println("[RUN] Vazgeçmeden önce ekran analizi fallback deneniyor...");
+                        boolean analysisProgressed = tryScreenAnalysisFallback(
+                                run, stepGoal, rawPageSource, i, analysisUsageCounter);
+                        if (analysisProgressed) {
+                            notFoundStreak[0] = 0;
+                            consecutiveFails = 0;
+                            repeatCount = 0;
+                            lastActionSignature = null;
+                            Thread.sleep(500);
+                            continue;
+                        }
+                        System.out.println("[RUN] Ekran analizi de ilerleme sağlayamadı, mevcut fallback'lere geçiliyor.");
+
                         String autoTapTarget = run.getAutoTapTarget();
                         if (autoTapTarget != null) {
-                            // LLM yine fail verdi ama sistem zaten scroll yapıp hedefi buldu!
-                            // OTOMATIK TAP yap!
                             System.out.println("[RUN] ⚡ LLM YINE FAIL VERDİ ama autoTapTarget var: " + autoTapTarget);
                             System.out.println("[RUN] ⚡ OTOMATIK TAP yapılıyor: " + autoTapTarget);
-                            
+
                             run.getSteps().add(new RunStep(i, "tap", autoTapTarget,
                                     "LLM tekrar 'fail' verdi ama sistem zaten scroll ile hedefi buldu: " + autoTapTarget + ". OTOMATIK TAP yapılıyor!"));
                             runStore.save(run);
-                            
-                            // Tap koordinatlarını bul
+
                             String tapTargetXml = appiumDriverManager.getPageSource(run.getId());
-                            
-                            // Hedef elementin koordinatlarını bul (resolveTargetCenter kullan)
+
                             int[] tapCoords = appiumDriverManager.resolveTargetCenter(run.getId(), tapTargetXml, null, autoTapTarget, stepGoal);
                             if (tapCoords == null) {
-                                // Koordinat bulunamadı, genel tap yap
-                                tapCoords = new int[]{500, 1000}; // Orta-alt ekran
+                                tapCoords = new int[]{500, 1000};
                             }
-                            
-                            // Tap yap
+
                             try {
                                 appiumDriverManager.tap(run.getId(), tapCoords[0], tapCoords[1]);
                                 notFoundStreak[0] = 0;
                                 consecutiveFails = 0;
                                 swipeRefusedCount[0] = 0;
                                 wrongTapRefusedCount[0] = 0;
-                                
-                                // Tap sonrası ekran görüntüsünü anında güncelle
+
                                 if (captureScreenshot) {
                                     try {
                                         screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
@@ -1767,18 +2314,17 @@ public class RunController {
                                         System.out.println("[RUN] Otomatik tap sonrası ekran görüntüsü alınamadı: " + screenEx.getMessage());
                                     }
                                 }
-                                
+
                                 System.out.println("[RUN] Otomatik tap işlemi BAŞARILI: " + autoTapTarget);
-                                
-                                // Metadata'yı temizle
+
                                 run.setAutoTapTarget(null);
                                 run.setAutoTapReason(null);
                                 runStore.save(run);
-                                
+
                                 Thread.sleep(1500);
                                 repeatCount = 0;
                                 lastActionSignature = null;
-                                continue; // Döngüye devam et
+                                continue;
                             } catch (Exception tapEx) {
                                 System.out.println("[RUN] Otomatik tap başarısız: " + tapEx.getMessage());
                                 run.getSteps().add(new RunStep(i, "failed", autoTapTarget, "Otomatik tap başarısız: " + tapEx.getMessage()));
@@ -1788,16 +2334,10 @@ public class RunController {
                                 continue;
                             }
                         }
-                        
-                        // [YENI 2026-09-14] LLM fail kararı verdi → ÖNCE otomatik scroll dene!
-                        // LLM "hedef bulunamadı" diyerek fail döndürmüş olabilir, ama belki
-                        // sadece ekran kaydırılmamış olabilir. Scroll sonrası tekrar ara.
-                        System.out.println("[RUN] LLM 'fail' kararı verdi: " + action.getReasoning());
-                        
+
                         AutoScrollOutcome outcome = autoScrollIfNeeded(run.getId(), rawPageSource, notFoundStreak, autoScrollAttempts);
                         if (outcome.exhausted()) {
-                            // Maksimum scroll'a ulaşıldı, gerçekten bulunamadı → FAIL
-                            run.getSteps().add(new RunStep(i, "failed", null, 
+                            run.getSteps().add(new RunStep(i, "failed", null,
                                     "LLM fail kararı verdi ve otomatik scroll sonrası da hedef bulunamadı: " + action.getReasoning()));
                             run.setStatus("failed");
                             run.setError("Hedeflenen element (\"" + action.getTarget() + "\") ekranın hiçbir kaydırma konumunda bulunamadı. " +
@@ -1808,73 +2348,60 @@ public class RunController {
                             screenRefreshRunning.set(false);
                             return;
                         } else if (outcome.scrolled() && outcome.effective()) {
-                            // Scroll başarılı, YENİ ekranda tekrar ara
                             rawPageSource = outcome.newPageSource();
                             System.out.println("[AUTO-SCROLL] Fail sonrası scroll başarılı, YENİ ekranda tekrar aranıyor...");
-                            System.out.println("[AUTO-SCROLL] Yeni XML uzunluğu: " + (rawPageSource != null ? rawPageSource.length() : 0) + " karakter");
-                            
-                            // Hedefi yeni ekranda tekrar ara
+
                             String matchingTarget = appiumDriverManager.findMatchingTarget(rawPageSource, stepGoal);
                             if (matchingTarget != null) {
                                 System.out.println("[AUTO-SCROLL] ✓ FAIL SONRASI YENİ EKRANDA HEDEF BULUNDU: " + matchingTarget);
-                                // [YENI 2026-09-14] Fail sonrası bulunan hedefi kaydet - eğer LLM yine fail verirse otomatik tap yap
                                 run.setAutoTapTarget(matchingTarget);
                                 run.setAutoTapReason("Fail sonrası scroll ile bulundu");
                                 runStore.save(run);
-                                
+
                                 run.getSteps().add(new RunStep(i, "swipe", null,
                                         "LLM fail kararı verdi ama otomatik scroll sonrası hedef YENİ EKRANDA BULUNDU: " + matchingTarget));
                                 runStore.save(run);
                                 repeatCount = 0;
                                 lastActionSignature = null;
-                                // [YENI 2026-09-14] ZORUNLU TAP mesajı - LLM'ye açıkça tap yapmasını söyle
-                                repeatWarning = "⚠️ KRITIK UYARI: Az önce 'fail' kararı verdin ama SİSTEM ekranı otomatik olarak " + 
+                                repeatWarning = "⚠️ KRITIK UYARI: Az önce 'fail' kararı verdin ama SİSTEM ekranı otomatik olarak " +
                                         turkishDirection(outcome.direction()) + " kaydırdı ve YENİ EKRANDA HEDEF BULUNDU!\n\n" +
                                         "🎯 BULUNAN HEDEF: " + matchingTarget + "\n\n" +
                                         "🚨 ŞU ANDA YAPMAN GEREKEN: Bu YENİ elementi TIKLA (tap)!\n\n" +
                                         "❌ YAPMAMAN GEREKENLER:\n" +
                                         "   - 'fail' verme (zaten scroll yapıldı ve hedef bulundu!)\n" +
-                                        "   - 'swipe' yapma (hedef zaten ekranda!)\n" +
-                                        "   - Aynı elemente tekrar tekrar tıklama (döngüye girersin!)\n\n" +
-                                        "✅ DOĞRU AKSIYON: '" + matchingTarget + "' elementine TIKLA ve testi bitir!\n\n" +
-                                        "⚡ OTOMATIK TAP UYARISI: Eğer yine 'fail' verirsen, SİSTEM OTOMATIK olarak '" + matchingTarget + "' elementine TIKLAYACAK ve testi SÜRECEK!";
-                                consecutiveFails = 0; // Fail sayacını sıfırla
+                                        "   - 'swipe' yapma (hedef zaten ekranda!)\n\n" +
+                                        "✅ DOĞRU AKSIYON: '" + matchingTarget + "' elementine TIKLA ve testi bitir!";
+                                consecutiveFails = 0;
                                 Thread.sleep(800);
-                                continue; // Döngüye devam et, yeni ekranda karar ver
+                                continue;
                             } else {
-                                System.out.println("[AUTO-SCROLL] ✗ FAIL SONRASI YENİ EKRANDA HEDEF BULUNAMADI");
                                 run.getSteps().add(new RunStep(i, "swipe", null,
                                         "LLM fail kararı verdi ve otomatik scroll sonrası da hedef bulunamadı, tekrar deneniyor..."));
                                 runStore.save(run);
                                 repeatCount = 0;
                                 lastActionSignature = null;
-                                repeatWarning = "Az önce 'fail' kararı verdin ve SİSTEM ekranı otomatik olarak " + 
-                                        turkishDirection(outcome.direction()) + " kaydırdı. AMA hedef YENİ EKRANDA DA BULUNAMADI. " + 
-                                        "Tekrar düşün: gerçekten fail mi vermeli, yoksa ekranda başka bir element mi hedeflemelisin? " + 
+                                repeatWarning = "Az önce 'fail' kararı verdin ve SİSTEM ekranı otomatik olarak " +
+                                        turkishDirection(outcome.direction()) + " kaydırdı. AMA hedef YENİ EKRANDA DA BULUNAMADI. " +
                                         "Aynı 'fail' kararını VERME, farklı bir aksiyon dene!";
-                                consecutiveFails = 0; // Fail sayacını sıfırla
+                                consecutiveFails = 0;
                                 Thread.sleep(800);
-                                continue; // Döngüye devam et
+                                continue;
                             }
                         } else if (outcome.scrolled()) {
-                            // Scroll yapıldı ama ekran değişmedi
                             run.getSteps().add(new RunStep(i, "swipe", null,
-                                    "LLM fail kararı verdi ve scroll denendi ama ekran İÇERİĞİ DEĞİŞMEDİ (kaydırılamıyor olabilir)."));
+                                    "LLM fail kararı verdi ve scroll denendi ama ekran İÇERİĞİ DEĞİŞMEDİ."));
                             runStore.save(run);
-                            repeatWarning = "Az önce 'fail' kararı verdin ve scroll denendi ama ekran hiç değişmedi -- bu ekran " +
-                                    "muhtemelen kaydırılamıyor (sabit bir form). 'fail' verme, bunun yerine: " +
-                                    "(a) ekranda ŞU AN GÖRÜNEN farklı bir elementle devam etmeyi dene, (b) bir klavye/popup açık olabilir, " +
-                                    "onu kapatmayı dene, (c) gerçekten farklı bir yöne kaydırmayı dene. AYNı 'fail' kararını VERME!";
+                            repeatWarning = "Az önce 'fail' kararı verdin ve scroll denendi ama ekran hiç değişmedi. " +
+                                    "'fail' verme, farklı bir elementle devam etmeyi dene!";
                             consecutiveFails = 0;
                             Thread.sleep(800);
                             continue;
                         } else {
-                            // Scroll yapılamadı
                             run.getSteps().add(new RunStep(i, "swipe", null,
-                                    "LLM fail kararı verdi ama scroll yapılamadı (max scroll'a ulaşılmış olabilir)."));
+                                    "LLM fail kararı verdi ama scroll yapılamadı."));
                             runStore.save(run);
-                            repeatWarning = "Az önce 'fail' kararı verdin ama sistem ekranı kaydıramadı (muhtemelen max scroll'a ulaşılmış). " +
-                                    "'fail' verme, bunun yerine ekranda ŞU AN GÖRÜNEN farklı bir elementle devam etmeyi dene!";
+                            repeatWarning = "Az önce 'fail' kararı verdin ama sistem ekranı kaydıramadı. " +
+                                    "'fail' verme, ekranda görünen farklı bir elementle devam etmeyi dene!";
                             consecutiveFails = 0;
                             Thread.sleep(800);
                             continue;
@@ -1898,8 +2425,6 @@ public class RunController {
             screenRefreshRunning.set(false);
         } catch (Exception e) {
             e.printStackTrace();
-            // [DUZELTME 2026-09-10] invalidateSession CAGIRMIYORUZ -- finally'deki stopSession
-            // zaten dogru sekilde quit() cagiriyor. Ikisi birlikte cagrilirsa cift quit olur.
             run.setStatus("error");
             run.setError(e.getMessage());
             run.setFinishedAt(Instant.now().toString());
@@ -1907,7 +2432,6 @@ public class RunController {
             runStore.save(run);
             screenRefreshRunning.set(false);
         } finally {
-            // Arka plan ekran güncelleme döngüsünü durdur
             screenRefreshRunning.set(false);
             liveScreenshots.remove(run.getId());
             if (recordVideo) {

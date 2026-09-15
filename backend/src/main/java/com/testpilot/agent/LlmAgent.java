@@ -27,20 +27,12 @@ public class LlmAgent {
             "(?iu)(^|[^\\p{L}])(yaz|yazın|yazınız|gir|girin|doldur|doldurun|type|enter)([^\\p{L}]|$)"
     );
 
-    // api-key ve model artık application.properties'ten @Value ile DEĞİL,
-    // AppSettingsService üzerinden veritabanından (panelden yönetilen) okunuyor.
     private final AppSettingsService appSettingsService;
 
     public LlmAgent(AppSettingsService appSettingsService) {
         this.appSettingsService = appSettingsService;
     }
 
-    // Panelde "LLM API URL" alanı boş bırakılırsa (ya da hiç ayarlanmamışsa) bu
-    // varsayılan kullanılır -- yani mevcut kurulumlar hiçbir şey yapmadan eskisi
-    // gibi OpenRouter'a devam eder. Doldurulursa (örn. Ollama'nın OpenAI-uyumlu
-    // "http://<ip>:11434/v1/chat/completions" adresi) istekler oraya gider --
-    // istek/yanıt şekli aynı olduğu için ("/choices/0/message/content") başka
-    // hiçbir kod değişikliği gerekmiyor.
     private static final String DEFAULT_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
     private String resolveApiUrl() {
@@ -90,6 +82,11 @@ public class LlmAgent {
           [product: X]) as one combined pool of text to search in. Use "contains" style
           matching: the goal's key word (e.g. "yellow") just needs to appear ANYWHERE in
           that combined text, not be an exact full match.
+        - IMPORTANT: An element line may be marked "[devre-dışı]" (disabled). Disabled
+          elements CANNOT be tapped -- the OS will silently swallow the touch event.
+          If the target you want to tap is marked "[devre-dışı]", you MUST first do
+          whatever is needed to make it active (fill a required field, toggle a switch,
+          accept terms...) instead of trying to tap it.
 
         ==================================================
         STEP-BY-STEP DECISION PROCESS (do this every single time)
@@ -98,7 +95,11 @@ public class LlmAgent {
            FIRST part of the goal that is NOT done yet -- that is your only job right now.
         2. Is there a popup / dialog / banner / permission / onboarding on screen blocking
            you? If yes, close it first: prefer "Skip" > "Close/OK/Cancel" > "Continue/Next".
-        3. Is the goal now fully complete, with real proof? -> action="done" (see DONE).
+        3. Is the goal now fully complete, with real proof? -> action="done" (see DONE below).
+           ⚠️ CRITICAL: "reklam sayfalarını atla" veya "ad pages are skipped" gibi ara hedefler
+           TAMAMLANDI diye düşünme! Bu sadece bir ara adım. Goal'da "sonra", "ve sonra", "ardından"
+           varsa VEYA goal'da başka yapmanız gereken şeyler varsa (ürün bul, tıkla, sepete ekle vb.)
+           action="done" DON'T return! Sadece TÜM goal tamamlandığında "done" döndür.
         4. Otherwise, decide if your current mini-goal is SPECIFIC or GENERIC:
            - SPECIFIC = the goal names an exact attribute: a color, size, brand, model,
              price, or exact name (e.g. "yellow", "iPhone 15", "size XL", "cheapest").
@@ -110,7 +111,7 @@ public class LlmAgent {
            - Search for an element whose combined text (label + text= + desc= + [product: X])
              CONTAINS the exact attribute word from the goal (e.g. contains "yellow"). Case
              does not matter.
-           - Found it? -> action="tap" on that exact element only.
+           - Found it? -> action="tap" on that exact element only (if not [devre-dışı]).
            - Not found on this screen? -> action="swipe" (see SCROLL below). Do NOT guess,
              do NOT tap a similar/close item ("blue" is not "yellow"). Never tap without an
              exact attribute match for a SPECIFIC mini-goal.
@@ -170,6 +171,8 @@ public class LlmAgent {
           "standard_user").
         - Always read label, text=, desc= AND "[product: X]" -- see the section above.
           The value you are looking for can be in any one of them.
+        - If an element is marked "[devre-dışı]" (disabled), the tap will NOT work.
+          NEVER try to tap it. Instead, do the REQUIRED prior step to enable it.
 
         ==================================================
         SUCCESS SIGNALS (an action already worked -- do not repeat it)
@@ -194,17 +197,31 @@ public class LlmAgent {
            - EVERY part of the goal is complete with real evidence (from success signals above,
              or from "Previous steps").
            - If unsure, keep working instead of guessing "done".
+           - ⚠️ CRITICAL: "reklam sayfalarını atla", "ad pages to skip", "tour atla" gibi
+             ARA HEDEFLER tamamlanması, TÜM goal'ın bittiği anlamına gelmez!
+             Goal'da "sonra", "ve sonra", "ardından" varsa VEYA başka yapmanız gereken
+             şeyler varsa (ürün bul, tıkla, sepete ekle, form doldur vb.) action="done" DON'T!
+             Sadece TÜM senaryo tamamlandığında "done" döndür.
 
         3. PROOF REQUIRED:
            - Screen change AFTER your tap = proof the action worked → done
            - Button text changed (e.g., "Add to Cart" → "Remove") = proof → move to next step or done
            - Navigation to a new screen = proof → done if goal is satisfied
+           - ⚠️ "reklam sayfalarını atla" için proof: Ana banking app ekranına ulaştın,
+             reklam/tour overlay yok. AMA goal'da "sonra X ürünü bul" varsa henüz BİTMEDİ!
 
         EXAMPLE: Goal = "uygulamayı aç. Sauce Labs Backpack (yellow) ürünü bulana kadar kaydır. bulunca tıkla ve testi bitir."
         - Step N: swipe down (scrolling to find product)
         - Step N+1: found [product: Sauce Labs Backpack (yellow)] → action="tap"
         - Step N+2: XML changed (new screen/product detail page) → action="done" (TEST COMPLETE!)
         - WRONG: Tapping the same product again on the new screen → this is a loop!
+
+        EXAMPLE MULTI-STEP: Goal = "reklam sayfalarını atla. sonra X ürününü bul ve tıkla."
+        - Step N: Skip ad pages (found "DEVAM" buttons, tapped them)
+        - Step N+1: Main app screen visible → ads skipped ✓
+        - Step N+2: ⚠️ DO NOT return "done"! Goal'da "sonra X ürününü bul ve tıkla" VAR!
+        - Step N+2: action="swipe" or action="tap" to find X product
+        - ONLY after X product is tapped → action="done"
 
         ==================================================
         MULTI-STEP SCENARIOS (CRITICAL - READ CAREFULLY)
@@ -288,6 +305,9 @@ public class LlmAgent {
           1. Re-read goal's exact product name (e.g., "Sauce Labs Backpack (yellow)")
           2. Re-read target element's [product: X] annotation
           3. Are they IDENTICAL? (every word, parentheses, color) → YES = tap, NO = continue
+        - **CRITICAL: DISABLED ELEMENTS** -- An element marked "[devre-dışı]" CANNOT be tapped.
+          If the goal asks to tap it, you MUST first do whatever enables it (fill form,
+          accept terms, toggle switch). Only ever return action="tap" on an ENABLED element.
         - Only ever return the JSON object, nothing before or after it.
         """;
 
@@ -309,7 +329,7 @@ public class LlmAgent {
                 lastException = e;
                 if (attempt < maxRetries) {
                     try {
-                        Thread.sleep(1000 * attempt); // Exponential backoff
+                        Thread.sleep(1000 * attempt);
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                     }
@@ -319,6 +339,209 @@ public class LlmAgent {
 
         throw new RuntimeException("Model " + maxRetries + " denemede geçerli JSON döndürmedi: " +
                 (lastException != null ? lastException.getMessage() : "Bilinmeyen hata"), lastException);
+    }
+
+    // ============================================================================================
+    // [YENİ 2026-09-15] EKRAN ANALİZİ ve AKIŞ PLANLAMA
+    //
+    // SENARYO EKSİK veya BELİRSİZ olduğunda ya da bir adımda takıldığımızda çağrılır.
+    // LLM'e "bu ekranı DETAYLI analiz et, uygulamanın yapısını anla, hedefe ulaşmak
+    // için EN MANTIKLI sonraki adımı öner" der. Aşağıdaki durumlarda kullanılır:
+    //   (1) Adım niyeti sınıflandırılamadı (UNKNOWN intent),
+    //   (2) Deterministik tap tüm scroll denemelerine rağmen hedefi bulamadı,
+    //   (3) LLM "fail" kararı verdi (vazgeçmeden ÖNCE son bir şans).
+    // ============================================================================================
+    public record ScreenAnalysisResult(
+            String screenName,
+            String screenPurpose,
+            List<String> availableActions,
+            String confidence,
+            AgentAction suggestedAction
+    ) {}
+
+    public ScreenAnalysisResult analyzeScreenAndPlanNextAction(
+            String goal,
+            String currentStep,
+            String pageSource,
+            List<RunStep> previousSteps) {
+
+        String prompt = buildScreenAnalysisPrompt(goal, currentStep, pageSource, previousSteps);
+
+        try {
+            var messages = mapper.createArrayNode();
+            var userMsg = mapper.createObjectNode();
+            userMsg.put("role", "user");
+            userMsg.put("content", prompt);
+            messages.add(userMsg);
+
+            var body = mapper.createObjectNode();
+            body.put("model", appSettingsService.getOrCreate().getOpenrouterModel());
+            body.set("messages", messages);
+            body.put("max_tokens", 900);
+            body.put("temperature", 0.2);
+
+            RequestBody requestBody = RequestBody.create(
+                    mapper.writeValueAsString(body),
+                    MediaType.parse("application/json"));
+
+            Request request = new Request.Builder()
+                    .url(resolveApiUrl())
+                    .addHeader("Authorization", "Bearer " + appSettingsService.getOpenrouterApiKeyDecrypted())
+                    .addHeader("Content-Type", "application/json")
+                    .post(requestBody)
+                    .build();
+
+            try (Response response = client.newCall(request).execute()) {
+                if (!response.isSuccessful() || response.body() == null) {
+                    String err = response.body() != null ? response.body().string() : "(boş)";
+                    throw new RuntimeException("Ekran analizi isteği başarısız: "
+                            + response.code() + " -> " + err);
+                }
+                String responseBody = response.body().string();
+                JsonNode root = mapper.readTree(responseBody);
+                String content = root.at("/choices/0/message/content").asText();
+
+                String jsonOnly = extractJson(content);
+
+                JsonNode parsed;
+                try {
+                    parsed = mapper.readTree(jsonOnly);
+                } catch (Exception parseEx) {
+                    System.out.println("[ANALYZE] JSON parse edilemedi, ham cevap:\n" + content);
+                    String cleaned = cleanJsonResponse(jsonOnly);
+                    parsed = mapper.readTree(cleaned);
+                }
+
+                String screenName = parsed.path("screenName").asText("");
+                String screenPurpose = parsed.path("screenPurpose").asText("");
+                String confidence = parsed.path("confidence").asText("medium");
+
+                List<String> actions = new java.util.ArrayList<>();
+                JsonNode actionsNode = parsed.path("availableActions");
+                if (actionsNode.isArray()) {
+                    for (JsonNode a : actionsNode) {
+                        String s = a.asText("");
+                        if (!s.isBlank()) actions.add(s);
+                    }
+                }
+
+                JsonNode suggestedNode = parsed.path("suggestedAction");
+                AgentAction suggested = new AgentAction();
+                suggested.setAction(suggestedNode.path("action").asText("wait").toLowerCase(Locale.ROOT));
+                suggested.setTarget(suggestedNode.path("target").asText(""));
+                suggested.setElementId(suggestedNode.path("elementId").asText(""));
+                suggested.setX(suggestedNode.path("x").asInt(0));
+                suggested.setY(suggestedNode.path("y").asInt(0));
+                suggested.setText(suggestedNode.path("text").asText(""));
+                suggested.setDirection(suggestedNode.path("direction").asText(""));
+                suggested.setReasoning(suggestedNode.path("reasoning").asText(""));
+
+                return new ScreenAnalysisResult(screenName, screenPurpose, actions, confidence, suggested);
+            }
+        } catch (IOException e) {
+            throw new RuntimeException("Ekran analizi sırasında IO hatası: " + e.getMessage(), e);
+        }
+    }
+
+    private String buildScreenAnalysisPrompt(String goal, String currentStep,
+                                             String pageSource, List<RunStep> previousSteps) {
+        StringBuilder history = new StringBuilder();
+        if (previousSteps != null && !previousSteps.isEmpty()) {
+            history.append("Önceki adımlar (kronolojik, en yenisi en altta):\n");
+            int start = Math.max(0, previousSteps.size() - 12);
+            for (int i = start; i < previousSteps.size(); i++) {
+                RunStep s = previousSteps.get(i);
+                boolean failed = "failed".equalsIgnoreCase(s.getAction());
+                history.append("- ").append(failed ? "❌" : "✅").append(" ")
+                        .append(s.getStep()).append(". adım: ")
+                        .append(s.getAction() != null ? s.getAction() : "?").append(" → ")
+                        .append(s.getTarget() != null && !s.getTarget().isBlank() ? s.getTarget() : "(hedef yok)")
+                        .append("\n");
+            }
+            history.append("\n");
+        }
+
+        return """
+            Sen kıdemli bir mobil QA otomasyon danışmanısın. Kullanıcı bir test senaryosu
+            yazdı ama senaryo EKSİK veya BELİRSİZ olabilir. Görevin: şu anki EKRANI
+            DETAYLI analiz etmek, uygulamanın yapısını anlamak ve hedefe ulaşmak için
+            EN MANTIKLI sonraki TEK aksiyonu önermek.
+
+            ═══════════════════════════════════════════════════════════════
+            BAĞLAM
+            ═══════════════════════════════════════════════════════════════
+            Kullanıcının hedefi (kısaltılmış veya eksik olabilir):
+            "%s"
+
+            Şu an üzerinde çalıştığımız adım:
+            "%s"
+
+            %s
+
+            ═══════════════════════════════════════════════════════════════
+            GÖREVİN (üç aşamalı)
+            ═══════════════════════════════════════════════════════════════
+            1. EKRANI TANIMLA
+               - Bu hangi ekran? (ör. "Giriş", "Ürün Listesi", "Sepet", "Onay")
+               - Amacı ne? (ör. "kullanıcı adı ve şifre ile oturum açma")
+
+            2. MEVCUT AKSİYONLARI LİSTELE
+               - Bu ekranda kullanıcı ne yapabilir? (form doldur, butona bas, kaydır, sekme değiştir)
+               - Sadece gerçekten GÖRÜNEN ve ETKİLEŞİLEBİLİR elementleri say
+
+            3. HEDEFE GÖRE SIRADAKİ AKSİYONU BELİRLE
+               - Genel hedefe ulaşmak için BURADA şu an yapılması gereken TEK aksiyon ne?
+               - Eksik adımı otomatik tamamla: örn. hedef sadece "giriş yap" diyorsa ve
+                 şu an Giriş ekranındaysan, ilk mantıklı adım kullanıcı adı alanına dokunmaktır.
+
+            ═══════════════════════════════════════════════════════════════
+            KURALLAR
+            ═══════════════════════════════════════════════════════════════
+            - EKRANDA MODAL/POPUP/DIALOG varsa ÖNCE onu kapat veya yanıtla
+              (ör. izin diyaloğu → "İzin ver", bilgilendirme → "Tamam")
+            - FORM varsa DOĞAL SIRAYLA ilerle: alanı doldur → sonraki alan → buton
+            - ANA EYLEM BUTONU (genelde ekranın en altındaki birincil buton) varsa ve
+              hedef o ekranı geçmekse → o butona öncelik ver
+            - Hedefe ZATEN ULAŞILDIYSA ve ekran hedefi tamamladıysa → action="done"
+            - Mevcut ekran hedefle ALAKASIZ görünüyorsa → action="swipe" (kaydır) veya
+              action="wait" (yükleniyor olabilir) öner
+            - ASLA ilerleme sağlamayan aksiyon önerme (rastgele butona basmak, aynı
+              elemente tekrar tekrar tap etmek gibi)
+            - elementId: XML listesinde GERÇEKTEN VAR OLAN bir [N] numarası olmalı.
+              Uydurma ID döndürme.
+            - Emin değilsen confidence="low", eminsen "high"
+            - Yanıt SADECE JSON olsun, öncesinde/sonrasında hiçbir metin olmasın
+
+            ═══════════════════════════════════════════════════════════════
+            ÇIKTI FORMATI (örnek)
+            ═══════════════════════════════════════════════════════════════
+            {
+              "screenName": "Giriş Ekranı",
+              "screenPurpose": "Kullanıcı adı ve şifre ile oturum açma",
+              "availableActions": [
+                "Kullanıcı adı alanına dokun",
+                "Şifre alanına dokun",
+                "Giriş butonuna bas",
+                "Şifremi unuttum linkine bas"
+              ],
+              "confidence": "high",
+              "suggestedAction": {
+                "action": "tap",
+                "target": "Kullanıcı Adı Alanı",
+                "elementId": "3",
+                "x": 0,
+                "y": 0,
+                "text": "",
+                "direction": "",
+                "reasoning": "Hedef oturum açmak; formun ilk adımı kullanıcı adı alanına dokunmak"
+              }
+            }
+
+            ═══════════════════════════════════════════════════════════════
+            EKRAN XML'İ (şu an ekranda görünen her şey)
+            ═══════════════════════════════════════════════════════════════
+            %s
+            """.formatted(goal, currentStep, history.toString(), pageSource);
     }
 
     private void enforceScenarioAction(AgentAction action, String goal) {
@@ -340,26 +563,23 @@ public class LlmAgent {
     }
 
     // [YENİ 2026-09-14] MULTI-STEP SENARYO DURUM ANALİZİ
-    // Modelin hangi adımda olduğunu anlaması için otomatik analiz yapar
     private String analyzeMultiStepProgress(String goal, List<RunStep> previousSteps) {
         if (goal == null || goal.isBlank()) return null;
-        
+
         String lowerGoal = goal.toLowerCase();
         boolean isMultiStep = lowerGoal.contains("sonra") || lowerGoal.contains("ve sonra") || lowerGoal.contains("ardından");
-        
-        if (!isMultiStep) return null; // Multi-step değil
-        
-        // Goal'daki adımları ayır
+
+        if (!isMultiStep) return null;
+
         String[] steps = splitMultiStepGoal(goal);
-        
-        // Her adımın tamamlanıp tamamlanmadığını kontrol et
+
         StringBuilder analysis = new StringBuilder();
         int completedCount = 0;
-        
+
         for (int i = 0; i < steps.length; i++) {
             String step = steps[i].trim();
             boolean isCompleted = isStepCompleted(step, previousSteps);
-            
+
             if (isCompleted) {
                 analysis.append("✅ ").append(i + 1).append(". adım TAMAMLANDI: ").append(step).append("\n");
                 completedCount++;
@@ -367,78 +587,66 @@ public class LlmAgent {
                 analysis.append("⏳ ").append(i + 1).append(". adım BEKLİYOR: ").append(step).append("\n");
             }
         }
-        
+
         analysis.append("\n📊 İLERLEME: ").append(completedCount).append("/").append(steps.length).append(" adım tamamlandı\n");
-        
+
         if (completedCount < steps.length) {
             analysis.append("🎯 ŞU AN YAPILMASI GEREKEN: ").append(steps[completedCount].trim()).append("\n");
-            
-            // Sonraki adım için özel talimatlar
+
             String nextStep = steps[completedCount].toLowerCase();
             if (nextStep.contains("geri dön") || nextStep.contains("back") || nextStep.contains("menü")) {
                 analysis.append("💡 İPUCU: 'Geri' veya 'Back' veya '←' butonunu ara. Aynı ürüne tekrar tıklama!\n");
             } else if (nextStep.contains("bul") || nextStep.contains("seç") || nextStep.contains("tap")) {
-                // Sonraki ürünü bul
                 String nextProduct = extractProductName(nextStep);
                 if (nextProduct != null) {
                     analysis.append("💡 İPUCU: '").append(nextProduct).append("' ürününü XML'de ara. [product: ").append(nextProduct).append("] etiketini ara!\n");
                 }
             }
         }
-        
+
         return analysis.toString();
     }
-    
-    // Multi-step goal'ı adımlara ayırır
+
     private String[] splitMultiStepGoal(String goal) {
-        // "sonra", "ve sonra", "ardından" kelimelerine göre ayır
         return goal.toLowerCase()
-            .replaceAll("sonra\\s+", "")
-            .replaceAll("ve sonra\\s+", "")
-            .replaceAll("ardından\\s+", "")
-            .split("\\.\\s*(?=uygulamayı|bul|tıkla|tap|seç|geri dön|bitir|tamamla)");
+                .replaceAll("sonra\\s+", "")
+                .replaceAll("ve sonra\\s+", "")
+                .replaceAll("ardından\\s+", "")
+                .split("\\.\\s*(?=uygulamayı|bul|tıkla|tap|seç|geri dön|bitir|tamamla)");
     }
-    
-    // Bir adımın tamamlanıp tamamlanmadığını kontrol eder
+
     private boolean isStepCompleted(String step, List<RunStep> previousSteps) {
         if (previousSteps == null || previousSteps.isEmpty()) return false;
-        
+
         String lowerStep = step.toLowerCase();
-        
-        // Her başarılı adım için kontrol et (failed adimlari atla)
+
         for (RunStep runStep : previousSteps) {
             if ("failed".equalsIgnoreCase(runStep.getAction())) {
                 continue;
             }
-            // Not: RunStep'te status field'i yok, bu yüzden sadece action/target'a bak
             String target = runStep.getTarget() != null ? runStep.getTarget().toLowerCase() : "";
             String action = runStep.getAction() != null ? runStep.getAction().toLowerCase() : "";
-            
-            // "tıkla" adımı için
+
             if (lowerStep.contains("tıkla") || lowerStep.contains("tap")) {
-                // Goal'daki ürün adını çıkar
                 String productName = extractProductName(lowerStep);
                 if (productName != null && target.contains(productName)) {
                     return true;
                 }
             }
-            
-            // "geri dön" adımı için
+
             if (lowerStep.contains("geri dön") || lowerStep.contains("back")) {
                 if (target.contains("geri") || target.contains("back") || target.contains("menu")) {
                     return true;
                 }
             }
         }
-        
+
         return false;
     }
-    
-    // Goal'dan ürün adını çıkarır (örn: "Sauce Labs Backpack (yellow)")
+
     private String extractProductName(String text) {
         if (text == null) return null;
-        
-        // [product: X] pattern'i ara
+
         int productStart = text.indexOf("[product:");
         if (productStart >= 0) {
             int start = productStart + 9;
@@ -447,15 +655,12 @@ public class LlmAgent {
                 return text.substring(start, end);
             }
         }
-        
-        // Parantezli renk bilgisi varsa (örn: "(yellow)")
-        // Onun ÖNCEKİ kelimeleri ürün adı olarak al
+
         int lastParen = text.lastIndexOf("(");
         if (lastParen > 0) {
             String beforeParen = text.substring(0, lastParen);
             String[] words = beforeParen.trim().split("\\s+");
             if (words.length > 0) {
-                // Son 2-3 kelimeyi ürün adı olarak al
                 int startIdx = Math.max(0, words.length - 3);
                 StringBuilder productName = new StringBuilder();
                 for (int i = startIdx; i < words.length; i++) {
@@ -467,137 +672,108 @@ public class LlmAgent {
                 }
             }
         }
-        
+
         return null;
     }
 
     private AgentAction makeLlmRequest(String goal, Map<String, String> variables, String screenshotBase64, String pageSource, int stepNumber, List<RunStep> previousSteps, String repeatWarning) throws IOException {
-        try {
-            var userContent = mapper.createArrayNode();
+        var userContent = mapper.createArrayNode();
 
-            String context = buildVariablesContext(variables);
+        String context = buildVariablesContext(variables);
 
-            StringBuilder historyText = new StringBuilder();
-            if (previousSteps != null && !previousSteps.isEmpty()) {
-                historyText.append("Önceki adımlarda yaptıkların (en yenisi en altta):\n");
-                // [DUZELTME 2026-09-14] MULTI-STEP TAKİBİ İÇİN SON 10 ADIM
-                // Modelin multi-step senaryolarda hangi adımda olduğunu hatırlaması için
-                int start = Math.max(0, previousSteps.size() - 10);
-                for (int i = start; i < previousSteps.size(); i++) {
-                    RunStep s = previousSteps.get(i);
-                    boolean failed = "failed".equalsIgnoreCase(s.getAction());
-                    historyText.append("- ").append(failed ? "❌ BAŞARISIZ" : "✅ BAŞARILI")
-                            .append(" ").append(s.getStep()).append(". adım: ")
-                            .append(s.getAction()).append(" -> ").append(s.getTarget())
-                            .append(" (").append(s.getReasoning()).append(")\n");
-                }
-                historyText.append("\n");
-                historyText.append("Yalnızca ✅ BAŞARILI kayıtları tamamlanmış kabul et; ❌ BAŞARISIZ kayıtları tekrar etme, ")
-                        .append("bunlar sistemin reddettiği veya gerçekleşmeyen denemelerdir.\n\n");
-                
-                // [YENİ 2026-09-14] MULTI-STEP DURUM ANALİZİ
-                // Modelin hangi adımda olduğunu anlaması için otomatik analiz
-                String multiStepAnalysis = analyzeMultiStepProgress(goal, previousSteps);
-                if (multiStepAnalysis != null && !multiStepAnalysis.isBlank()) {
-                    historyText.append("🔍 MULTI-STEP DURUM ANALİZİ:\n").append(multiStepAnalysis).append("\n\n");
-                }
+        StringBuilder historyText = new StringBuilder();
+        if (previousSteps != null && !previousSteps.isEmpty()) {
+            historyText.append("Önceki adımlarda yaptıkların (en yenisi en altta):\n");
+            int start = Math.max(0, previousSteps.size() - 10);
+            for (int i = start; i < previousSteps.size(); i++) {
+                RunStep s = previousSteps.get(i);
+                boolean failed = "failed".equalsIgnoreCase(s.getAction());
+                historyText.append("- ").append(failed ? "❌ BAŞARISIZ" : "✅ BAŞARILI")
+                        .append(" ").append(s.getStep()).append(". adım: ")
+                        .append(s.getAction()).append(" -> ").append(s.getTarget())
+                        .append(" (").append(s.getReasoning()).append(")\n");
             }
+            historyText.append("\n");
+            historyText.append("Yalnızca ✅ BAŞARILI kayıtları tamamlanmış kabul et; ❌ BAŞARISIZ kayıtları tekrar etme, ")
+                    .append("bunlar sistemin reddettiği veya gerçekleşmeyen denemelerdir.\n\n");
 
-            // RunController'daki tekrar-tespiti (repeatCount==1, henuz FAIL esigi olan 2'ye
-            // ulasmadan) tetiklendiginde buraya dolu bir uyari metni geliyor -- promptun EN
-            // ONUNE, hedef/XML'den once koyuyoruz ki model gormezden gelmesi zor olsun.
-            String repeatWarningBlock = (repeatWarning != null && !repeatWarning.isBlank())
-                    ? ("!!! " + repeatWarning + " !!!\n\n")
-                    : "";
+            String multiStepAnalysis = analyzeMultiStepProgress(goal, previousSteps);
+            if (multiStepAnalysis != null && !multiStepAnalysis.isBlank()) {
+                historyText.append("🔍 MULTI-STEP DURUM ANALİZİ:\n").append(multiStepAnalysis).append("\n\n");
+            }
+        }
 
-            var textNode = mapper.createObjectNode();
-            textNode.put("type", "text");
-            String baseText = repeatWarningBlock + context + historyText + "Hedef: " + goal + "\nBu " + stepNumber + ". adım. "
-                    + "Ekrandaki XML ağacı:\n" + pageSource;
+        String repeatWarningBlock = (repeatWarning != null && !repeatWarning.isBlank())
+                ? ("!!! " + repeatWarning + " !!!\n\n")
+                : "";
 
-            // NOT (2026-09-10): Burada eskiden hedef metni "bul" kelimesini iceriyorsa ozel bir
-            // arama/kaydirma ipucu ekleniyordu. Bu ipucu SYSTEM_PROMPT'taki genel KAYDIRMA/URUN
-            // ARAMA kurallariyla CAKISIYORDU ve -- "yukari"/"asagi" kelimeleri icin -- direction
-            // degerini SYSTEM_PROMPT'un/gercek swipe() davranisinin TERSI sekilde aciklayarak modeli
-            // yanlis yone kaydirmaya yonlendiriyordu (bkz. AppiumDriverManager.swipe() ustundeki
-            // 2026-09-10 duzeltme notu). Artik tum arama/kaydirma rehberligi TEK bir yerde,
-            // SYSTEM_PROMPT icinde (KAYDIRMA / URUN ARAMA bolumleri) veriliyor -- iki yerin
-            // birbirinden sapip celiskili talimat vermesini onlemek icin bu ozel-durum kodu
-            // kaldirildi.
+        var textNode = mapper.createObjectNode();
+        textNode.put("type", "text");
+        String baseText = repeatWarningBlock + context + historyText + "Hedef: " + goal + "\nBu " + stepNumber + ". adım. "
+                + "Ekrandaki XML ağacı:\n" + pageSource;
 
-            textNode.put("text", baseText + "\n\nYukarıdaki XML'e bakarak bir sonraki aksiyonu belirle.");
-            userContent.add(textNode);
+        textNode.put("text", baseText + "\n\nYukarıdaki XML'e bakarak bir sonraki aksiyonu belirle.");
+        userContent.add(textNode);
 
+        var messages = mapper.createArrayNode();
+        var systemMsg = mapper.createObjectNode();
+        systemMsg.put("role", "system");
+        systemMsg.put("content", SYSTEM_PROMPT);
+        messages.add(systemMsg);
 
+        var userMsg = mapper.createObjectNode();
+        userMsg.put("role", "user");
+        userMsg.set("content", userContent);
+        messages.add(userMsg);
 
-            var messages = mapper.createArrayNode();
-            var systemMsg = mapper.createObjectNode();
-            systemMsg.put("role", "system");
-            systemMsg.put("content", SYSTEM_PROMPT);
-            messages.add(systemMsg);
+        var body = mapper.createObjectNode();
+        body.put("model", appSettingsService.getOrCreate().getOpenrouterModel());
+        body.set("messages", messages);
+        body.put("max_tokens", 1024);
+        body.put("temperature", 0.15);
 
-            var userMsg = mapper.createObjectNode();
-            userMsg.put("role", "user");
-            userMsg.set("content", userContent);
-            messages.add(userMsg);
+        RequestBody requestBody = RequestBody.create(
+                mapper.writeValueAsString(body),
+                MediaType.parse("application/json")
+        );
 
-            var body = mapper.createObjectNode();
-            body.put("model", appSettingsService.getOrCreate().getOpenrouterModel());
-            body.set("messages", messages);
-            body.put("max_tokens", 1024);
-            // Bu bir "hangi elemente tiklamaliyim" gibi TEK dogru cevabi olan bir karar --
-            // yaraticilik degil tutarlilik istiyoruz. Varsayilan temperature (~0.7-1.0) modelin
-            // ayni ekranda farkli seferlerde farkli/kararsiz secimler yapmasina katkida bulunuyordu.
-            // Dusuk bir deger (0.15) ayni durumda neredeyse hep ayni karari vermesini sagliyor.
-            body.put("temperature", 0.15);
+        Request request = new Request.Builder()
+                .url(resolveApiUrl())
+                .addHeader("Authorization", "Bearer " + appSettingsService.getOpenrouterApiKeyDecrypted())
+                .addHeader("Content-Type", "application/json")
+                .post(requestBody)
+                .build();
 
-            RequestBody requestBody = RequestBody.create(
-                    mapper.writeValueAsString(body),
-                    MediaType.parse("application/json")
-            );
+        try (Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                String errorBody = response.body() != null ? response.body().string() : "(boş yanıt)";
+                throw new RuntimeException("LLM isteği başarısız: " + response.code() + " " + response.message() + " -> " + errorBody);
+            }
+            String responseBody = response.body().string();
+            JsonNode root = mapper.readTree(responseBody);
+            String content = root.at("/choices/0/message/content").asText();
 
-            Request request = new Request.Builder()
-                    .url(resolveApiUrl())
-                    .addHeader("Authorization", "Bearer " + appSettingsService.getOpenrouterApiKeyDecrypted())
-                    .addHeader("Content-Type", "application/json")
-                    .post(requestBody)
-                    .build();
-
-            try (Response response = client.newCall(request).execute()) {
-                if (!response.isSuccessful() || response.body() == null) {
-                    String errorBody = response.body() != null ? response.body().string() : "(boş yanıt)";
-                    throw new RuntimeException("LLM isteği başarısız: " + response.code() + " " + response.message() + " -> " + errorBody);
-                }
-                String responseBody = response.body().string();
-                JsonNode root = mapper.readTree(responseBody);
-                String content = root.at("/choices/0/message/content").asText();
-
-                String jsonOnly = extractJson(content);
-                AgentAction result;
+            String jsonOnly = extractJson(content);
+            AgentAction result;
+            try {
+                result = mapper.readValue(jsonOnly, AgentAction.class);
+            } catch (Exception parseEx) {
+                System.out.println("JSON parse edilemedi, modelin ham cevabı:\n" + content);
+                System.out.println("JSON temizlenmiş hali:\n" + jsonOnly);
+                String cleanedJson = cleanJsonResponse(jsonOnly);
                 try {
-                    result = mapper.readValue(jsonOnly, AgentAction.class);
-                } catch (Exception parseEx) {
-                    System.out.println("JSON parse edilemedi, modelin ham cevabı:\n" + content);
-                    System.out.println("JSON temizlenmiş hali:\n" + jsonOnly);
-                    // JSON'ı temizlemeyi dene - kaçış dizeleri sorun olabilir
-                    String cleanedJson = cleanJsonResponse(jsonOnly);
-                    try {
-                        result = mapper.readValue(cleanedJson, AgentAction.class);
-                        System.out.println("JSON temizleme ile başarıyla parse edildi");
-                    } catch (Exception cleanEx) {
-                        throw new RuntimeException("Model geçerli JSON döndürmedi: " + parseEx.getMessage() +
-                                " (Temizlenmiş JSON da parse edilemedi: " + cleanEx.getMessage() + ")");
-                    }
+                    result = mapper.readValue(cleanedJson, AgentAction.class);
+                    System.out.println("JSON temizleme ile başarıyla parse edildi");
+                } catch (Exception cleanEx) {
+                    throw new RuntimeException("Model geçerli JSON döndürmedi: " + parseEx.getMessage() +
+                            " (Temizlenmiş JSON da parse edilemedi: " + cleanEx.getMessage() + ")");
                 }
-                if (result == null || result.getAction() == null) {
-                    System.out.println("Model boş/geçersiz aksiyon döndürdü, ham cevap:\n" + content);
-                    throw new RuntimeException("Model boş veya geçersiz bir aksiyon döndürdü (muhtemelen API boş content döndü)");
-                }
-                return result;
             }
-        } finally {
-            // IOException'ı yeniden fırlat, wrapper olarak değil
-            // Dış retry döngüsü bunu yakalayacak
+            if (result == null || result.getAction() == null) {
+                System.out.println("Model boş/geçersiz aksiyon döndürdü, ham cevap:\n" + content);
+                throw new RuntimeException("Model boş veya geçersiz bir aksiyon döndürdü (muhtemelen API boş content döndü)");
+            }
+            return result;
         }
     }
 
@@ -625,44 +801,33 @@ public class LlmAgent {
         return cleaned;
     }
 
-    /**
-     * JSON yanıtını temizler - özellikle kaçış dizeleri ve geçersiz karakterleri düzeltir.
-     * LLM'ler bazen string alanlarda tırnak işaretlerini kaçış dizesi olmadan kullanır.
-     */
     private String cleanJsonResponse(String json) {
         if (json == null || json.isBlank()) return json;
 
         try {
-            // Önce geçerli JSON olup olmadığını kontrol et
             mapper.readTree(json);
-            return json; // Zaten geçerli
+            return json;
         } catch (Exception e) {
-            // Geçersiz JSON, temizlemeyi dene
         }
 
         String cleaned = json;
 
-        // reasoning ve target alanlarındaki kaçışsız tırnak işaretlerini düzelt
-        // Örnek: "reasoning": "Bu "butona" tıkla" → "reasoning": "Bu \"butona\" tıkla"
-        // Basit yaklaşım: string içindeki çift tırnakları kaçışlı hale getir
-        // reasoning alanını bul ve içindeki kaçışsız tırnakları düzelt
         if (cleaned.contains("\"reasoning\":")) {
             int reasoningStart = cleaned.indexOf("\"reasoning\":");
             int reasoningValueStart = cleaned.indexOf("\"", reasoningStart + 12);
             if (reasoningValueStart >= 0) {
-                reasoningValueStart++; // açılış tırnağından sonra
+                reasoningValueStart++;
                 int reasoningValueEnd = cleaned.indexOf("\"", reasoningValueStart);
                 if (reasoningValueEnd > reasoningValueStart) {
                     String reasoningValue = cleaned.substring(reasoningValueStart, reasoningValueEnd);
                     String cleanedReasoning = reasoningValue.replace("\"", "\\\"");
                     cleaned = cleaned.substring(0, reasoningValueStart) +
-                              cleanedReasoning +
-                              cleaned.substring(reasoningValueEnd);
+                            cleanedReasoning +
+                            cleaned.substring(reasoningValueEnd);
                 }
             }
         }
 
-        // target alanı için de aynı işlem
         if (cleaned.contains("\"target\":")) {
             int targetStart = cleaned.indexOf("\"target\":");
             int targetValueStart = cleaned.indexOf("\"", targetStart + 9);
@@ -673,13 +838,12 @@ public class LlmAgent {
                     String targetValue = cleaned.substring(targetValueStart, targetValueEnd);
                     String cleanedTarget = targetValue.replace("\"", "\\\"");
                     cleaned = cleaned.substring(0, targetValueStart) +
-                              cleanedTarget +
-                              cleaned.substring(targetValueEnd);
+                            cleanedTarget +
+                            cleaned.substring(targetValueEnd);
                 }
             }
         }
 
-        // text alanı için de aynı işlem
         if (cleaned.contains("\"text\":")) {
             int textStart = cleaned.indexOf("\"text\":");
             int textValueStart = cleaned.indexOf("\"", textStart + 7);
@@ -690,8 +854,8 @@ public class LlmAgent {
                     String textValue = cleaned.substring(textValueStart, textValueEnd);
                     String cleanedText = textValue.replace("\"", "\\\"");
                     cleaned = cleaned.substring(0, textValueStart) +
-                              cleanedText +
-                              cleaned.substring(textValueEnd);
+                            cleanedText +
+                            cleaned.substring(textValueEnd);
                 }
             }
         }
@@ -699,18 +863,10 @@ public class LlmAgent {
         return cleaned.trim();
     }
 
-    // "Ne test etmek istiyorsun?" alanindaki auto_awesome ikonuna baglaniyor -- kullanicinin
-    // yazdigi ham/dagimik metni analiz edip NUMARASIZ, ATOMIK adimlar halinde yeniden yaziyor.
-    // Amac: calisma zamaninda zayif bir modelin (Qwen gibi) hedefi her adimda yeniden parcalamak
-    // zorunda kalmadan, onceden ayristirilmis net bir adim listesi kullanabilmesi (bkz. SYSTEM_PROMPT
-    // ADIM 1 notu). HALUSINASYON KORUMASI: prompt, kullanicinin belirtmedigi buton/alan/element
-    // isimlerini UYDURMAMASI icin acikca kisitlanmis; kullanicinin verdigi urun/kullanici adi/
-    // degisken gibi somut degerler DEGISTIRILMEDEN aynen korunuyor. callForSuggestions'tan farkli
-    // olarak JSON degil DUZ METIN donuyor.
     public String improveGoalText(String rawText) {
         if (rawText == null || rawText.isBlank()) return rawText;
         try {
-                String prompt = "Asagidaki metin bir mobil uygulama test senaryosunun hedefini tanimliyor "
+            String prompt = "Asagidaki metin bir mobil uygulama test senaryosunun hedefini tanimliyor "
                     + "(bir kullanici bunu serbest metin olarak yazdi). Bu metni NUMARASIZ, ATOMIK "
                     + "adimlar halinde yeniden yaz. Kurallar:\n"
                     + "1) Metindeki her ayri eylemi (nokta/virgul/\"ve\"/\"sonra\" ile ayrilan kisimlari) "
@@ -847,6 +1003,7 @@ public class LlmAgent {
             throw new RuntimeException("Senaryo önerisi alınırken hata oluştu", e);
         }
     }
+
     public List<ScenarioSuggestion> suggestScenarios(String goal, List<RunStep> steps) {
         StringBuilder visitedPages = new StringBuilder();
         if (steps != null && !steps.isEmpty()) {
@@ -890,6 +1047,7 @@ public class LlmAgent {
 
         return callForSuggestions(prompt, 6000);
     }
+
     public List<ScenarioSuggestion> suggestScenariosForPage(String goal, List<RunStep> steps, String pageName) {
         StringBuilder visitedPages = new StringBuilder();
         if (steps != null && !steps.isEmpty()) {
@@ -927,6 +1085,7 @@ public class LlmAgent {
 
         return callForSuggestions(prompt, 3000);
     }
+
     private String extractJsonArray(String content) {
         if (content == null) return "[]";
         String cleaned = content.trim();
