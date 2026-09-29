@@ -48,12 +48,12 @@ public class RunController {
     );
 
     private static final List<String> TOUR_INDICATOR_KEYWORDS = List.of(
-            // İngilizce
-            "tour", "onboarding", "welcome", "getting started", "introduction", 
-            "step", "slide", "carousel",
-            // Türkçe
-            "tur", "hoş geldiniz", "hos geldiniz", "karşılama", "karsılama",
-            "tanıtım", "tanitim", "giriş", "giris"
+            // İngilizce - Sadece gerçek tour/onboarding overlay sayfaları
+            "welcome to", "welcome!", "welcome,", "get started", "let's go", "lets go",
+            "first time", "new user", "getting started with",
+            // Türkçe - Sadece gerçek tour/onboarding overlay sayfaları
+            "hoş geldiniz", "hos geldiniz", "hoşunuza", "hosunuza",
+            "ilk defa", "ilk kez", "yeni misiniz", "yeni mısınız"
     );
 
     // ============================================================================================
@@ -74,11 +74,27 @@ public class RunController {
 
         String normalized = goal.replace('\n', ' ').replace('\r', ' ');
 
+        // ÖNCE: "tıkla", "tikla", "seç", "sec", "bas" gibi emir kiplerini önceki cümleyle birleştir
+        // Örnek: "Devam butonu görünür olana kadar kaydır. tıkla." → tek adım olarak kalır
+        java.util.regex.Pattern attachPattern = java.util.regex.Pattern.compile(
+                "(?i)(?<=\\.)\\s+(?=(tıkla|tikla|seç|sec|bas|tap|click|select|press|aç|open|git|go)\\.)");
+        String attached = attachPattern.matcher(normalized).replaceAll(" ");
+
+        // Noktalama eksik olsa bile ardışık aksiyonları ayır.
+        // Örn: '... "Kartla Kazan" olan elemente tıkla "Fatura ..." Hemen Katıl butonuna tıkla'
+        // İki ayrı 'tıkla' aksiyonu tek adıma sıkışmasın diye aksiyon fiilinden sonra sınır ekle.
+        // İstisna: 've sonra tıkla', 'ardından seç' gibi bağlaçla süren bileşik ifadeleri bölme.
+        java.util.regex.Pattern actionSplit = java.util.regex.Pattern.compile(
+                "(?i)(?<![a-zA-ZçğıöşüÇĞİÖŞÜ])(tıkla|tikla|seç|sec|dokun|tap|click|select|press)"
+                        + "\\s+(?!(?:ve|sonra|ardından|ardindan|then|and|ile|veya|or|ya|daha|de|da)"
+                        + "(?![a-zA-ZçğıöşüÇĞİÖŞÜ]))(?=[\"'“”]|[A-Za-zÇĞİÖŞÜ0-9])");
+        attached = actionSplit.matcher(attached).replaceAll("$1. ");
+
         java.util.List<String> collected = new java.util.ArrayList<>();
         java.util.regex.Pattern sentencePattern = java.util.regex.Pattern.compile(
-                "(?i)(?<=\\.)\\s+|(?<=\\!)\\s+|(?<=\\?)\\s+|\\s+(?:sonra|ve sonra|ardından|daha sonra|then|and then|after that|after)\\s+");
+                "(?i)(?<=\\.)\\s+|(?<=\\!)\\s+|(?<=\\?)\\s+");
 
-        String[] bySentence = sentencePattern.split(normalized);
+        String[] bySentence = sentencePattern.split(attached);
         for (String raw : bySentence) {
             String step = raw.trim();
             if (step.isEmpty()) continue;
@@ -920,22 +936,56 @@ public class RunController {
     // Ekranda Product Tour / Onboarding Tour overlay varsa otomatik olarak tespit eder
     // ve "Skip", "Next", "Got it" gibi butonları tıklar veya ekrana tıklar.
     // Senaryodan bağımsız olarak her adımda kontrol edilir.
+    //
+    // ÖNEMLİ: Ana ekran (home screen) tespit edilirse tour kontrolü ATLANIR.
+    // Ana ekran elementleri: "Hoş Geldiniz", "Bireysel", "Ticari", "FAST İşlemleri" vb.
     // ============================================================================================
     private void handleTourOverlay(String runId, String rawPageSource) {
         try {
-            // 1. Tour overlay var mı kontrol et
             List<String> allElements = appiumDriverManager.parseAllElementLabels(rawPageSource);
+            
+            // 1. ÖNCE: Ana ekran mı kontrol et (ANA EKRANDA tour kontrolü YOK)
+            boolean isHomeScreen = allElements.stream()
+                    .anyMatch(e -> {
+                        String lower = e.toLowerCase(Locale.ROOT);
+                        // Ana ekran indicator'ları - bunlar varsa tour DEĞİL
+                        return lower.contains("bireysel") || 
+                               lower.contains("ticari") ||
+                               lower.contains("fast") ||
+                               lower.contains("işlemleri") ||
+                               lower.contains("piyasa") ||
+                               lower.contains("karekod") ||
+                               lower.contains("başvuru") ||
+                               lower.contains("vakifbank") ||
+                               lower.contains("logo");
+                    });
+            
+            if (isHomeScreen) {
+                // Ana ekran - tour kontrolü YAPILMAZ
+                return;
+            }
+            
+            // 2. Tour overlay var mı kontrol et
+            // İYILEŞTIRME: Tour skip butonları ("Atla", "İleri") varsa BU BIR TOUR SAYFASIDIR
+            boolean hasTourSkipButton = allElements.stream()
+                    .anyMatch(e -> TOUR_SKIP_KEYWORDS.stream()
+                            .anyMatch(keyword -> e.toLowerCase(Locale.ROOT).contains(keyword)));
             
             boolean hasTourIndicator = allElements.stream()
                     .anyMatch(e -> TOUR_INDICATOR_KEYWORDS.stream()
                             .anyMatch(keyword -> e.toLowerCase(Locale.ROOT).contains(keyword)));
             
-            if (!hasTourIndicator) {
-                // Tour indicator yok, kontrol etmeye gerek yok
+            // Tour indicator YOK ama skip butonu VAR → BU BIR TOUR SAYFASIDIR
+            if (!hasTourIndicator && !hasTourSkipButton) {
+                // Ne indicator ne skip butonu - tour degil
                 return;
             }
             
-            System.out.println("[TOUR] 🎯 Product Tour / Onboarding overlay tespit edildi!");
+            if (hasTourSkipButton) {
+                System.out.println("[TOUR] 🎯 Tour sayfası tespit edildi (skip butonu var)!");
+            } else {
+                System.out.println("[TOUR] 🎯 Product Tour / Onboarding overlay tespit edildi!");
+            }
             System.out.println("[TOUR]   Ekrandaki elementler: " + allElements);
             
             // 2. Skip/Next butonu var mı ara
@@ -1013,10 +1063,23 @@ public class RunController {
         System.out.println("[ANALYZE] 🧠 Ekran analizi başlatılıyor (adım " + stepIndex
                 + ", kullanım: " + analysisUsageCounter[0] + "/5)...");
 
+        // ⭐ YENİ: LLM'e SADECE mevcut adımı gönder, sonraki adımları gizle
+        // LLM'in sonraki adımları görüp karıştırmaması için
+        java.util.List<RunStep> stepsForLLM = new java.util.ArrayList<>();
+        if (stepIndex >= 0 && stepIndex < run.getSteps().size()) {
+            // Sadece mevcut adım ve önceki adımlar
+            for (int j = 0; j <= stepIndex; j++) {
+                stepsForLLM.add(run.getSteps().get(j));
+            }
+            System.out.println("[ANALYZE] 📝 LLM'e gönderilen adımlar: " + stepsForLLM.size() + "/" + run.getSteps().size() + " (sonraki adımlar gizlendi)");
+        } else {
+            stepsForLLM = run.getSteps();
+        }
+
         LlmAgent.ScreenAnalysisResult analysis;
         try {
             analysis = llmAgent.analyzeScreenAndPlanNextAction(
-                    run.getGoal(), stepGoal, rawPageSource, run.getSteps());
+                    run.getGoal(), stepGoal, rawPageSource, stepsForLLM);
         } catch (Exception analyzeEx) {
             System.out.println("[ANALYZE] ✗ Analiz başarısız: " + analyzeEx.getMessage());
             return false;
@@ -1542,7 +1605,82 @@ public class RunController {
                                         System.out.println("[TAP-STEP] ✗ Koordinat tap başarısız: " + tapEx.getMessage());
                                     }
                                 } else {
-                                    System.out.println("[TAP-STEP] ⚠ Koordinat geçersiz: (" + center[0] + "," + center[1] + ")");
+                                    // ⭐ YENİ: Koordinat viewport'ta DEĞİL → Scroll yapıp görünür hale getir
+                                    System.out.println("[TAP-STEP] ⚠ Koordinat viewport'ta DEĞİL: (" + center[0] + "," + center[1] + ")");
+                                    System.out.println("[TAP-STEP] 📜 Element viewport dışı, scroll yapılıyor...");
+                                    
+                                    // Scroll yap (aşağı veya yukarı, elementin konumuna göre)
+                                    int[] screenSize = appiumDriverManager.getScreenSize(run.getId());
+                                    if (screenSize != null) {
+                                        int viewportHeight = screenSize[1];
+                                        int elementY = center[1];
+                                        
+                                        if (elementY > viewportHeight) {
+                                            // Element ekranın altında → Aşağı scroll
+                                            System.out.println("[TAP-STEP]   Element ekranın altında (y=" + elementY + ", viewport=" + viewportHeight + ")");
+                                            appiumDriverManager.swipe(run.getId(), "down");
+                                        } else if (elementY < 0) {
+                                            // Element ekranın üstünde → Yukarı scroll
+                                            System.out.println("[TAP-STEP]   Element ekranın üstünde (y=" + elementY + ")");
+                                            appiumDriverManager.swipe(run.getId(), "up");
+                                        } else {
+                                            // Y koordinatı viewport içinde ama X dışında olabilir
+                                            System.out.println("[TAP-STEP]   Element Y koordinatı viewport içinde ama tıklanamıyor");
+                                            appiumDriverManager.swipe(run.getId(), "down");
+                                        }
+                                        
+                                        Thread.sleep(500);
+                                        
+                                        // Yeni page source al ve tekrar dene
+                                        String afterScrollSource = appiumDriverManager.getPageSource(run.getId());
+                                        List<String> afterScrollElements = appiumDriverManager.parseAllElementLabels(afterScrollSource);
+                                        System.out.println("[TAP-STEP]   Scroll sonrası element sayısı: " + afterScrollElements.size());
+                                        
+                                        // Hedef hala var mı kontrol et
+                                        if (afterScrollElements.stream().anyMatch(e -> e.contains(found))) {
+                                            System.out.println("[TAP-STEP] ✓ Hedef scroll sonrası hala mevcut, tekrar deneniyor...");
+                                            rawPageSource = afterScrollSource;
+                                            
+                                            // Koordinatı tekrar çöz ve tıkla
+                                            int[] newCenter = appiumDriverManager.resolveTargetCenter(
+                                                    run.getId(), rawPageSource, null, found, stepGoal);
+                                            if (newCenter != null && appiumDriverManager.isCoordinateOnViewport(run.getId(), newCenter[0], newCenter[1])) {
+                                                System.out.println("[TAP-STEP] 🥈 Scroll sonrası koordinat tap: (" + newCenter[0] + "," + newCenter[1] + ")");
+                                                try {
+                                                    appiumDriverManager.tap(run.getId(), newCenter[0], newCenter[1]);
+                                                    System.out.println("[TAP-STEP] ✓ Scroll sonrası tap BAŞARILI: '" + found + "'");
+                                                    
+                                                    run.getSteps().add(new RunStep(i, "tap", found,
+                                                            "Hedef '" + found + "' scroll sonrası tıklandı (" + newCenter[0] + "," + newCenter[1] + ")"));
+                                                    if (captureScreenshot) {
+                                                        try {
+                                                            screenshot = appiumDriverManager.takeScreenshotBase64(run.getId());
+                                                            liveScreenshots.put(run.getId(), screenshot);
+                                                        } catch (Exception ignore) {}
+                                                    }
+                                                    Thread.sleep(1500);
+
+                                                    String afterTapSource = appiumDriverManager.getPageSource(run.getId());
+                                                    String cleanedSource = handleSystemDialogsIfAny(run.getId(), afterTapSource, "tap sonrası");
+                                                    if (!cleanedSource.equals(afterTapSource)) {
+                                                        rawPageSource = cleanedSource;
+                                                    }
+
+                                                    notFoundStreak[0] = 0;
+                                                    consecutiveFails = 0;
+                                                    repeatCount = 0;
+                                                    lastActionSignature = null;
+                                                    currentExecutionStep++;
+                                                    runStore.save(run);
+                                                    continue;
+                                                } catch (Exception tapEx) {
+                                                    System.out.println("[TAP-STEP] ✗ Scroll sonrası tap başarısız: " + tapEx.getMessage());
+                                                }
+                                            }
+                                        } else {
+                                            System.out.println("[TAP-STEP] ✗ Hedef scroll sonrası kayboldu");
+                                        }
+                                    }
                                 }
                             } else {
                                 System.out.println("[TAP-STEP] ⚠ Koordinat çözülemedi");

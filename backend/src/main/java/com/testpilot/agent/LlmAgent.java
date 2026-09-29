@@ -13,6 +13,9 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.springframework.stereotype.Component;
 
+import javax.net.ssl.*;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
 import java.io.IOException;
 import java.util.List;
 import java.util.Locale;
@@ -40,10 +43,43 @@ public class LlmAgent {
         return (configured != null && !configured.isBlank()) ? configured.trim() : DEFAULT_OPENROUTER_URL;
     }
 
-    private final OkHttpClient client = new OkHttpClient.Builder()
+    private final OkHttpClient client = createInsecureHttpClient()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
             .build();
+
+    /**
+     * Creates an OkHttpClient with disabled SSL certificate validation.
+     * WARNING: Only for development! Do NOT use in production.
+     */
+    private OkHttpClient.Builder createInsecureHttpClient() {
+        try {
+            // Create a trust manager that does not validate certificate chains
+            final TrustManager[] trustAllCerts = new TrustManager[] {
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() {
+                        return new X509Certificate[0];
+                    }
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) {}
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) {}
+                }
+            };
+
+            // Install the all-trusting trust manager
+            final SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, trustAllCerts, new SecureRandom());
+            
+            // Create an sslSocketFactory with the all-trusting trust manager
+            final SSLSocketFactory sslSocketFactory = sslContext.getSocketFactory();
+
+            return new OkHttpClient.Builder()
+                .sslSocketFactory(sslSocketFactory, (X509TrustManager) trustAllCerts[0])
+                .hostnameVerifier((hostname, session) -> true);
+                
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create insecure HTTP client", e);
+        }
+    }
 
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -990,17 +1026,36 @@ public class LlmAgent {
             try (Response response = client.newCall(request).execute()) {
                 if (!response.isSuccessful() || response.body() == null) {
                     String errorBody = response.body() != null ? response.body().string() : "(boş yanıt)";
+                    System.err.println("[LLM] ❌ İstek başarısız: " + response.code());
+                    System.err.println("[LLM] Hata gövdesi: " + errorBody);
                     throw new RuntimeException("LLM isteği başarısız: " + response.code() + " -> " + errorBody);
                 }
                 String responseBody = response.body().string();
                 JsonNode root = mapper.readTree(responseBody);
                 String content = root.at("/choices/0/message/content").asText();
 
+                System.out.println("[LLM] 📝 LLM'den gelen ham içerik (ilk 500 karakter): " + 
+                    (content.length() > 500 ? content.substring(0, 500) + "..." : content));
+
                 String jsonOnly = extractJsonArray(content);
-                return mapper.readValue(jsonOnly, mapper.getTypeFactory().constructCollectionType(List.class, ScenarioSuggestion.class));
+                System.out.println("[LLM] 🔍 Parse edilen JSON (ilk 500 karakter): " + 
+                    (jsonOnly.length() > 500 ? jsonOnly.substring(0, 500) + "..." : jsonOnly));
+
+                if (jsonOnly.isBlank() || jsonOnly.equals("[]")) {
+                    System.err.println("[LLM] ⚠️ Boş veya geçersiz JSON döndü: '" + jsonOnly + "'");
+                    return List.of(); // Boş liste döndür
+                }
+
+                List<ScenarioSuggestion> result = mapper.readValue(jsonOnly, 
+                    mapper.getTypeFactory().constructCollectionType(List.class, ScenarioSuggestion.class));
+                
+                System.out.println("[LLM] ✅ " + result.size() + " senaryo önerisi başarıyla parse edildi");
+                return result;
             }
         } catch (IOException e) {
-            throw new RuntimeException("Senaryo önerisi alınırken hata oluştu", e);
+            System.err.println("[LLM] ❌ IO Hatası: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Senaryo önerisi alınırken hata oluştu: " + e.getMessage(), e);
         }
     }
 
@@ -1087,14 +1142,30 @@ public class LlmAgent {
     }
 
     private String extractJsonArray(String content) {
-        if (content == null) return "[]";
+        if (content == null || content.isBlank()) {
+            System.out.println("[LLM] ⚠️ İçerik null veya boş");
+            return "[]";
+        }
         String cleaned = content.trim();
+        
+        // Markdown code block temizliği
         cleaned = cleaned.replaceAll("```json", "").replaceAll("```", "").trim();
+        
+        // İlk '[' ve son ']' bul
         int start = cleaned.indexOf('[');
         int end = cleaned.lastIndexOf(']');
-        if (start >= 0 && end > start) {
-            return cleaned.substring(start, end + 1);
+        
+        if (start < 0) {
+            System.err.println("[LLM] ⚠️ '[' bulunamadı, içerik: " + cleaned.substring(0, Math.min(200, cleaned.length())));
+            return "[]";
         }
-        return cleaned;
+        if (end <= start) {
+            System.err.println("[LLM] ⚠️ ']' bulunamadı veya geçersiz, içerik: " + cleaned.substring(0, Math.min(200, cleaned.length())));
+            return "[]";
+        }
+        
+        String extracted = cleaned.substring(start, end + 1);
+        System.out.println("[LLM] 📦 JSON array uzunluğu: " + extracted.length() + " karakter");
+        return extracted;
     }
 }

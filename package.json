@@ -1,0 +1,15 @@
+{
+  "name": "testpilot-backend",
+  "version": "1.0.0",
+  "description": "Test Pilot Backend - Spring Boot Application",
+  "scripts": {
+    "clean": "cd backend && mvn clean",
+    "install": "cd backend && mvn clean install -DskipTests",
+    "start": "cd backend && mvn spring-boot:run",
+    "build": "cd backend && mvn package -DskipTests",
+    "test": "cd backend && mvn test"
+  },
+  "keywords": ["spring-boot", "test-automation", "appium"],
+  "author": "",
+  "license": "ISC"
+}

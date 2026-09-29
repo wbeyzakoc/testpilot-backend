@@ -84,7 +84,8 @@ public class AppiumDriverManager {
                         .setNoReset(false)
                         .setAppWaitDuration(Duration.ofSeconds(20))
                         .setNewCommandTimeout(Duration.ofSeconds(300))
-                        .amend("autoLaunch", false);
+                        .amend("autoLaunch", false)
+                        .amend("disableWindowAnimation", true);
                 if (deviceName != null && !deviceName.isBlank()) options.setDeviceName(deviceName);
                 if (platformVersion != null && !platformVersion.isBlank()) options.setPlatformVersion(platformVersion);
 
@@ -345,7 +346,7 @@ public class AppiumDriverManager {
                 labels.add(e.label());
             } else if (e.isPassword()) {
                 labels.add("(sifre alani)");
-            } else if (!e.resourceId().isBlank()) {
+            } else if (e.resourceId() != null && !e.resourceId().isBlank()) {
                 labels.add(e.resourceId());
             }
         }
@@ -958,6 +959,24 @@ public class AppiumDriverManager {
             return null;
         }
 
+        // ⭐ YENİ: Tour/Onboarding skip butonları öncelikli kontrol
+        // "Atla butonuna tıkla", "İleri" gibi goal'lar için direkt skip butonu ara
+        for (String skipKeyword : List.of("atla", "ileri", "devam", "anladım", "anladim", "başla", "basla", "kapat", "tamam")) {
+            if (goalLower.contains(skipKeyword + " tıkla") || goalLower.contains(skipKeyword + " tikla") || goalLower.equals(skipKeyword)) {
+                System.out.println("[findMatch] 🎯 Tour skip butonu aranıyor: \"" + skipKeyword + "\"");
+                for (Elem e : enriched) {
+                    String labelLower = e.label() != null ? e.label().toLowerCase(Locale.ROOT) : "";
+                    if (labelLower.contains(skipKeyword)) {
+                        System.out.println("[findMatch] ✓ Tour skip butonu bulundu: \"" + e.label() + "\"");
+                        return e.label();
+                    }
+                }
+                System.out.println("[findMatch] ✗ Tour skip butonu bulunamadı: \"" + skipKeyword + "\"");
+                // Skip butonu bulunamadı, normal aramaya devam et
+                break;
+            }
+        }
+
         // TIER 0: TAM ÜRÜN ADI
         String exactProductName = extractExactProductName(goal);
         if (exactProductName != null) {
@@ -1310,30 +1329,42 @@ public class AppiumDriverManager {
     public ElementLocator findElementLocatorByLabel(String rawPageSource, String targetLabel, String goal) {
         if (rawPageSource == null || targetLabel == null || targetLabel.isBlank()) return null;
 
-        List<Elem> emitted = buildEmittedList(rawPageSource, goal);
+        // ⭐ DUZELTME: goal kullanma - sadece parseNumberedElements kullan
+        // buildEmittedList goal'a göre sıralama yapıyor, bu yanlış element'i ilk sıraya koyabilir
+        List<Elem> numbered = parseNumberedElements(rawPageSource);
         Elem match = null;
 
-        // Önce tam eşleşme
-        for (Elem e : emitted) {
-            String base = e.label().replaceAll("\\s*\\(\\d+\\)\\s*$", "").trim();
-            if (base.equalsIgnoreCase(targetLabel)) {
+        // ÖNCE: TAM eşleşme (case-insensitive, newline normalize)
+        String targetNormalized = targetLabel.replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+        
+        for (Elem e : numbered) {
+            String labelNormalized = e.label().replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+            if (labelNormalized.equals(targetNormalized)) {
                 match = e;
+                System.out.println("[FIND] ✓ TAM eşleşme bulundu: '" + e.label() + "'");
                 break;
             }
         }
-        // Sonra kısmi
+        
+        // SONRA: Kısmi eşleşme (SADECE targetLabel element label'ı İÇERİYORSA)
         if (match == null) {
-            for (Elem e : emitted) {
-                if (e.label().toLowerCase(Locale.ROOT).contains(targetLabel.toLowerCase(Locale.ROOT))) {
+            for (Elem e : numbered) {
+                String labelNormalized = e.label().replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+                if (labelNormalized.contains(targetNormalized)) {
                     match = e;
+                    System.out.println("[FIND] ✓ Kısmi eşleşme bulundu: '" + e.label() + "' (target: '" + targetLabel + "')");
                     break;
                 }
             }
         }
-        if (match == null) return null;
+        
+        if (match == null) {
+            System.out.println("[FIND] ✗ Hiçbir eşleşme bulunamadı: '" + targetLabel + "'");
+            return null;
+        }
 
         String xpath = buildXPath(rawPageSource, match);
-        return new ElementLocator(
+                return new ElementLocator(
                 match.resourceId(),
                 xpath,
                 match.contentDesc(),
@@ -1941,9 +1972,50 @@ public class AppiumDriverManager {
         Pattern p = Pattern.compile(attrName + "=\"([^\"]*)\"");
         Matcher m = p.matcher(tag);
         if (m.find()) {
-            return m.group(1);
+            return decodeXmlEntities(m.group(1));
         }
         return null;
+    }
+
+    // XML attribute değerlerindeki entity'leri çöz (&#10; -> newline, &amp; -> & vb.)
+    // Canlı Appium driver'ı bu entity'leri gerçek karaktere çözdüğü için, page source'tan
+    // okuduğumuz değerleri de aynı şekilde çözmezsek eşleşme/locator kopuyor.
+    private String decodeXmlEntities(String s) {
+        if (s == null || s.indexOf('&') < 0) return s;
+
+        Matcher dec = Pattern.compile("&#(\\d+);").matcher(s);
+        StringBuffer sb = new StringBuffer();
+        while (dec.find()) {
+            String rep;
+            try {
+                rep = String.valueOf((char) Integer.parseInt(dec.group(1)));
+            } catch (Exception e) {
+                rep = dec.group(0);
+            }
+            dec.appendReplacement(sb, Matcher.quoteReplacement(rep));
+        }
+        dec.appendTail(sb);
+        s = sb.toString();
+
+        Matcher hex = Pattern.compile("&#[xX]([0-9A-Fa-f]+);").matcher(s);
+        sb = new StringBuffer();
+        while (hex.find()) {
+            String rep;
+            try {
+                rep = String.valueOf((char) Integer.parseInt(hex.group(1), 16));
+            } catch (Exception e) {
+                rep = hex.group(0);
+            }
+            hex.appendReplacement(sb, Matcher.quoteReplacement(rep));
+        }
+        hex.appendTail(sb);
+        s = sb.toString();
+
+        return s.replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&apos;", "'")
+                .replace("&amp;", "&");
     }
 
     private String resourceIdToLabel(String resourceId) {
